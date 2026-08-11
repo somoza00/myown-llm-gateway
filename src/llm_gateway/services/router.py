@@ -1,0 +1,1 @@
+"""Provider selection: priority ordering, model-capability matching, and optional load balancing across providers."""

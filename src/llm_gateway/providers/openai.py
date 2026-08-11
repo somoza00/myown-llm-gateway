@@ -1,0 +1,1 @@
+"""OpenAI provider adapter (also serves OpenAI-compatible endpoints such as Groq)."""

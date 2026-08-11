@@ -1,0 +1,1 @@
+"""HTTP routers: thin API layer that validates requests and delegates to services — no business logic here."""

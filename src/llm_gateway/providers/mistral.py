@@ -1,0 +1,1 @@
+"""Mistral provider adapter: schema translation and authentication for the Mistral API."""

@@ -1,0 +1,1 @@
+"""Unit tests for the fallback engine: failure classification and provider ordering on retry."""

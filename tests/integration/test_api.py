@@ -1,0 +1,1 @@
+"""End-to-end tests: chat completion flow covering auth, caching, fallback, and usage logging."""

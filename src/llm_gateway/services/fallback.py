@@ -1,0 +1,1 @@
+"""Fallback engine: provider failure classification, retry/backoff policy, and temporary provider exclusion."""

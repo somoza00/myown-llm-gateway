@@ -1,0 +1,1 @@
+"""Provider configuration schemas: supported models, priority order, timeouts, and per-token cost."""

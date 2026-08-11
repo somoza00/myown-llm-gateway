@@ -1,0 +1,1 @@
+"""Gateway orchestrator: cache lookup → provider routing → fallback handling → metrics and usage recording."""

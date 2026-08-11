@@ -1,0 +1,1 @@
+"""Health and readiness endpoints: liveness probe plus dependency checks (Redis, database)."""

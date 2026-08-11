@@ -1,0 +1,1 @@
+"""Provider adapters: one module per upstream LLM provider, all implementing the shared async interface."""

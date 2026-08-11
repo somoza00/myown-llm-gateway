@@ -1,0 +1,1 @@
+"""Anthropic provider adapter: schema translation and authentication for the Anthropic API."""

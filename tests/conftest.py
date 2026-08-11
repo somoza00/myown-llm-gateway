@@ -1,0 +1,1 @@
+"""Shared pytest fixtures: test client, mocked providers, Redis stub, and SQLite-backed app instance."""

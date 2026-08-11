@@ -1,0 +1,1 @@
+"""Chat completions endpoint: validates the request, authenticates the virtual key, and delegates to the gateway service."""

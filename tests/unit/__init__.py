@@ -1,0 +1,1 @@
+"""Unit tests: isolated layer behavior with no external dependencies."""

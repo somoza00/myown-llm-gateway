@@ -1,0 +1,1 @@
+"""Redis client wrapper: async connection pool, serialization helpers, and health check."""

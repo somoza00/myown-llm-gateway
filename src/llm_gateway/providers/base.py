@@ -1,0 +1,1 @@
+"""Abstract BaseProvider: the async chat-completion interface every provider adapter must implement."""

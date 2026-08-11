@@ -1,0 +1,1 @@
+"""Unit tests for provider selection: priority ordering and capability matching."""

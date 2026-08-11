@@ -1,0 +1,1 @@
+"""Public request/response schemas for the OpenAI-compatible chat completions endpoint."""

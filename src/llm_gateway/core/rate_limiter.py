@@ -1,0 +1,1 @@
+"""Redis-backed sliding-window rate limiter used by the API middleware to enforce per-key request quotas."""

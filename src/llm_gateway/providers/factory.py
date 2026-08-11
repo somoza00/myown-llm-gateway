@@ -1,0 +1,1 @@
+"""Provider registry and factory: instantiates configured providers by name with shared client wiring."""
