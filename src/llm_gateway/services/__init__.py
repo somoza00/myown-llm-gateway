@@ -1,1 +1,1 @@
-"""Service layer: orchestration and business logic — cache, routing, fallback, metrics, and usage logging."""
+"""Service layer: orchestration and business logic - cache, routing, fallback, metrics, usage."""
