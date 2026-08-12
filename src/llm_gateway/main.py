@@ -41,7 +41,7 @@ async def _openai_style_exception_handler(_request: Request, exc: Exception) -> 
     body = detail if isinstance(detail, dict) and "error" in detail else {
         "error": {"message": str(detail), "type": "invalid_request_error"}
     }
-    return JSONResponse(status_code=exc.status_code, content=body)
+    return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
 
 
 def create_app() -> FastAPI:

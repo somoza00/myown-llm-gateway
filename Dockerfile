@@ -8,10 +8,14 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY alembic ./alembic
+COPY alembic.ini ./
+COPY docker-entrypoint.sh ./
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir . \
+    && chmod +x docker-entrypoint.sh \
     && useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app
 
@@ -19,4 +23,5 @@ USER appuser
 
 EXPOSE 8000
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["uvicorn", "llm_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

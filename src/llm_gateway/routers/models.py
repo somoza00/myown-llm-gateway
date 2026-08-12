@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from llm_gateway.routers.chat import authenticate_request, get_registry
+from llm_gateway.routers.chat import enforce_rate_limit, get_registry
 
 router = APIRouter(tags=["models"])
 
 
 @router.get("/v1/models")
-async def list_models(_virtual_key_id: int = Depends(authenticate_request)) -> dict[str, object]:
+async def list_models(_virtual_key_id: int = Depends(enforce_rate_limit)) -> dict[str, object]:
     """List models available across active providers, OpenAI /v1/models style."""
     owned: dict[str, str] = {}
     for provider in get_registry().all():

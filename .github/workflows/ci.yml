@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy src/llm_gateway
+
+      - name: Test (pytest)
+        run: pytest
+
+      - name: Migration smoke test (alembic upgrade/downgrade against SQLite)
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./ci-migration-check.db"
+        run: |
+          alembic upgrade head
+          alembic downgrade base

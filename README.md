@@ -38,13 +38,28 @@ Clean architecture, grouped by layer (not by feature):
 
 ## Setup
 
-> TODO: prerequisites (Python 3.11+, Docker), install steps, and how to run
-> migrations / seed the first virtual API key.
+Prerequisites: Docker + Docker Compose (or Python 3.11+ and a local Redis/Postgres).
 
 ```bash
-cp .env.example .env   # fill in provider keys
+cp .env.example .env   # fill in your provider keys
 docker compose up --build
 ```
+
+The `gateway` container runs `alembic upgrade head` on every start before serving
+(see `docker-entrypoint.sh`), so tables are always up to date — no manual
+migration step required.
+
+Once the stack is up, provision your first virtual API key:
+
+```bash
+docker compose exec gateway llm-gateway create-key --client-name "my-app"
+```
+
+This prints the raw key once (only its SHA-256 hash is stored) — use it as the
+`Authorization: Bearer <key>` header against `/v1/chat/completions`.
+
+Running without Docker: point `DATABASE_URL`/`REDIS_URL` at local services, then
+`alembic upgrade head` before `llm-gateway`.
 
 ## Usage
 

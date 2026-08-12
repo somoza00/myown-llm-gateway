@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from llm_gateway.core.config import get_settings
 from llm_gateway.core.exceptions import (
     InvalidVirtualKeyError,
     NoProviderAvailableError,
     ProviderError,
 )
+from llm_gateway.core.rate_limiter import check_rate_limit
 from llm_gateway.core.security import authenticate_virtual_key
 from llm_gateway.models.api import ChatRequest, ChatResponse
 from llm_gateway.providers.factory import ProviderRegistry, build_registry
@@ -57,9 +59,21 @@ async def authenticate_request(request: Request) -> int:
     return int(record.id)
 
 
+async def enforce_rate_limit(virtual_key_id: int = Depends(authenticate_request)) -> int:
+    """Reject the request with 429 once the virtual key exceeds its request quota."""
+    if not await check_rate_limit(virtual_key_id):
+        settings = get_settings()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}},
+            headers={"Retry-After": str(settings.RATE_LIMIT_WINDOW_SECONDS)},
+        )
+    return virtual_key_id
+
+
 @router.post("/v1/chat/completions", response_model=ChatResponse)
 async def chat_completions(
-    body: ChatRequest, virtual_key_id: int = Depends(authenticate_request)
+    body: ChatRequest, virtual_key_id: int = Depends(enforce_rate_limit)
 ) -> ChatResponse:
     """Serve a chat completion: authenticate, then delegate to the gateway service."""
     try:

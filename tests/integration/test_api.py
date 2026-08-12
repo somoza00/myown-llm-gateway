@@ -80,6 +80,35 @@ async def test_chat_completions_full_flow(client, registry, redis_stub, api_key)
     assert all(log.model == "gpt-4o" for log in logs)
 
 
+async def test_chat_completions_rate_limited(
+    client, registry, redis_stub, api_key, monkeypatch
+) -> None:
+    from llm_gateway.core import rate_limiter
+
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 2)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(OPENAI_CHAT_URL).mock(return_value=httpx.Response(200, json=openai_response()))
+
+        # Each request uses a distinct body so none of them are served from cache;
+        # the rate limit is what should stop the third one, not a cache hit.
+        for i in range(2):
+            body = {"model": "gpt-4o", "messages": [{"role": "user", "content": f"msg-{i}"}]}
+            resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+            assert resp.status_code == 200, resp.text
+
+        body = {"model": "gpt-4o", "messages": [{"role": "user", "content": "msg-3"}]}
+        resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+        assert resp.status_code == 429, resp.text
+        assert resp.json() == {
+            "error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}
+        }
+        assert resp.headers["retry-after"] == "60"
+
+    await asyncio.sleep(0.05)  # let the fire-and-forget usage-persist tasks finish
+
+
 async def test_health_ready_ok_when_redis_and_db_up(client, monkeypatch) -> None:
     async def _redis_ok() -> bool:
         return True
@@ -103,7 +132,7 @@ async def test_health_ready_degraded_when_redis_down(client, monkeypatch) -> Non
     assert body["database"] is True
 
 
-async def test_models_lists_active_providers(client, registry, api_key) -> None:
+async def test_models_lists_active_providers(client, registry, redis_stub, api_key) -> None:
     # The models endpoint is authenticated: 401 without a key
     resp = await client.get("/v1/models")
     assert resp.status_code == 401

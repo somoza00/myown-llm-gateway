@@ -22,17 +22,73 @@ os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 os.environ["MISTRAL_API_KEY"] = "test-mistral-key"
 
 
+class RedisPipelineStub:
+    """Mimics redis.asyncio's pipeline: commands queue, execute() runs them in order."""
+
+    def __init__(self, sorted_sets: dict[str, dict[str, float]]) -> None:
+        self._sorted_sets = sorted_sets
+        self._ops: list[tuple] = []
+
+    def zremrangebyscore(self, key: str, min_: float, max_: float) -> RedisPipelineStub:
+        self._ops.append(("zremrangebyscore", key, min_, max_))
+        return self
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> RedisPipelineStub:
+        self._ops.append(("zadd", key, mapping))
+        return self
+
+    def zcard(self, key: str) -> RedisPipelineStub:
+        self._ops.append(("zcard", key))
+        return self
+
+    def expire(self, key: str, seconds: int) -> RedisPipelineStub:
+        self._ops.append(("expire", key, seconds))
+        return self
+
+    async def execute(self) -> list:
+        results = []
+        for op in self._ops:
+            kind = op[0]
+            if kind == "zremrangebyscore":
+                _, key, min_, max_ = op
+                members = self._sorted_sets.setdefault(key, {})
+                stale = [m for m, score in members.items() if min_ <= score <= max_]
+                for m in stale:
+                    del members[m]
+                results.append(len(stale))
+            elif kind == "zadd":
+                _, key, mapping = op
+                self._sorted_sets.setdefault(key, {}).update(mapping)
+                results.append(len(mapping))
+            elif kind == "zcard":
+                _, key = op
+                results.append(len(self._sorted_sets.get(key, {})))
+            elif kind == "expire":
+                results.append(True)
+        return results
+
+    async def __aenter__(self) -> RedisPipelineStub:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
 class RedisStub:
-    """In-memory stand-in for the async Redis client used by the cache service."""
+    """In-memory stand-in for the async Redis client used by the cache and rate limiter."""
 
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
 
     async def get(self, key: str) -> str | None:
         return self.store.get(key)
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.store[key] = value
+
+    def pipeline(self) -> RedisPipelineStub:
+        return RedisPipelineStub(self.sorted_sets)
 
 
 @pytest.fixture(scope="session")
@@ -53,9 +109,10 @@ def db() -> Iterator[None]:
 
 @pytest.fixture
 def redis_stub(monkeypatch: pytest.MonkeyPatch) -> RedisStub:
-    """Replace the cache's Redis client with an in-memory stub."""
+    """Replace the cache's and rate limiter's Redis client with a shared in-memory stub."""
     stub = RedisStub()
     monkeypatch.setattr("llm_gateway.services.cache.redis_client", stub)
+    monkeypatch.setattr("llm_gateway.core.rate_limiter.redis_client", stub)
     return stub
 
 
