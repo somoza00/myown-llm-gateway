@@ -66,6 +66,25 @@ This prints the raw key once, e.g. `sk-...` — only its SHA-256 hash is stored,
 so it cannot be recovered later. Save it. Use it as the `Authorization` header
 on every request.
 
+Add `--expires-in-days N` to issue a key that stops authenticating after N days:
+
+```bash
+docker compose exec gateway llm-gateway create-key --client-name "temp-integration" --expires-in-days 30
+```
+
+List keys (metadata only — id, client name, active state, expiry; raw keys are
+never recoverable) and revoke one by id:
+
+```bash
+docker compose exec gateway llm-gateway list-keys
+docker compose exec gateway llm-gateway revoke-key --key-id 3
+```
+
+A revoked or expired key returns `401 Invalid API key` on every subsequent
+request. Key creation and revocation are recorded in the `audit_logs` table
+(action, key id, client name, timestamp) — an append-only trail, never updated
+by application code.
+
 ## 4. First call
 
 Non-streaming:

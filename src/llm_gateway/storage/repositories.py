@@ -8,7 +8,7 @@ from typing import TypedDict
 from sqlalchemy import select
 
 from llm_gateway.storage.database import async_session_factory
-from llm_gateway.storage.orm import ApiKey, UsageLog
+from llm_gateway.storage.orm import ApiKey, AuditLog, UsageLog
 
 
 class UsageLogData(TypedDict):
@@ -34,4 +34,39 @@ async def create_usage_log(data: UsageLogData) -> None:
     """Persist a usage-log entry."""
     async with async_session_factory() as session:
         session.add(UsageLog(**data))
+        await session.commit()
+
+
+async def list_keys() -> list[ApiKey]:
+    """Return every API key, oldest first."""
+    async with async_session_factory() as session:
+        result = await session.execute(select(ApiKey).order_by(ApiKey.id))
+        return list(result.scalars().all())
+
+
+async def deactivate_key(key_id: int) -> ApiKey | None:
+    """Set is_active=False for the given key id; return the updated record, or None if not found."""
+    async with async_session_factory() as session:
+        key = await session.get(ApiKey, key_id)
+        if key is None:
+            return None
+        key.is_active = False
+        await session.commit()
+        await session.refresh(key)
+        return key
+
+
+async def create_audit_log(
+    *, action: str, virtual_key_id: int, client_name: str, detail: str | None = None
+) -> None:
+    """Append an audit-log entry for a sensitive key action. Never updated or deleted."""
+    async with async_session_factory() as session:
+        session.add(
+            AuditLog(
+                action=action,
+                virtual_key_id=virtual_key_id,
+                client_name=client_name,
+                detail=detail,
+            )
+        )
         await session.commit()

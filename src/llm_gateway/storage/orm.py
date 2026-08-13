@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models: api_keys and usage_logs tables."""
+"""SQLAlchemy ORM models: api_keys, usage_logs, and audit_logs tables."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ class ApiKey(Base):
     hashed_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     client_name: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -37,5 +38,20 @@ class UsageLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
     timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class AuditLog(Base):
+    """Append-only record of sensitive actions (key creation, revocation). Never updated."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    virtual_key_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"), index=True)
+    client_name: Mapped[str] = mapped_column(String(255))
+    detail: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

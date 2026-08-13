@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Virtual-key expiration: `create-key --expires-in-days N`; expired keys are
+  rejected at authentication the same as inactive ones.
+- `llm-gateway revoke-key --key-id <id>` to deactivate a virtual key so it can
+  no longer authenticate.
+- `llm-gateway list-keys` to list key metadata (id, client name, active state,
+  timestamps) — never prints raw keys or hashes.
+- Append-only `audit_logs` table recording `key_created` and `key_revoked`
+  actions (key id, client name, timestamp); written by the CLI, never updated.
+
+### Security
+- CI now runs `pip-audit` against the installed dependency set on every push
+  and pull request.
+- Bumped `pytest` to `>=9.0.3` (was `>=8.3,<9.0`), fixing PYSEC-2026-1845
+  (predictable `/tmp` directory naming); `pytest-asyncio` bumped to `>=1.4`
+  for compatibility.
+
 ## [0.1.0] - 2026-08-13
 
 ### Added

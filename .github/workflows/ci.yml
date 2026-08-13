@@ -29,6 +29,9 @@ jobs:
       - name: Type check (mypy)
         run: mypy src/llm_gateway
 
+      - name: Dependency vulnerability scan (pip-audit)
+        run: pip-audit
+
       - name: Test (pytest)
         run: pytest
 
