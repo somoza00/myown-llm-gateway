@@ -1,4 +1,6 @@
-"""OpenAI provider adapter (also serves OpenAI-compatible endpoints such as Groq)."""
+"""OpenAI provider adapter (also serves OpenAI-compatible endpoints such as Groq,
+Gemini, DeepSeek, and Ollama).
+"""
 
 from __future__ import annotations
 
@@ -22,17 +24,23 @@ class OpenAIProvider(BaseProvider):
         config: ProviderConfig,
         client: httpx.AsyncClient,
         *,
-        api_key: str,
+        api_key: str | None = None,
     ) -> None:
         super().__init__(config, client)
+        # Optional: local/self-hosted OpenAI-compatible servers (e.g. Ollama) commonly
+        # require no credential at all. When unset, requests carry no Authorization
+        # header rather than a literal "Bearer None".
         self.api_key = api_key
         self.base_url = (config.base_url or DEFAULT_BASE_URL).rstrip("/")
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
     async def chat_completion(self, request: ChatRequest) -> ChatResponse:
         """POST the request body unchanged; OpenAI-compatible hosts accept it as-is."""
         response = await self._post(
             f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers=self._headers(),
             payload=request.model_dump(exclude_none=True),
             timeout_seconds=self.config.timeout,
         )
@@ -45,7 +53,7 @@ class OpenAIProvider(BaseProvider):
         payload["stream_options"] = {"include_usage": True}
         async for line in self._iter_sse_lines(
             f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers=self._headers(),
             payload=payload,
             timeout_seconds=self.config.timeout,
         ):

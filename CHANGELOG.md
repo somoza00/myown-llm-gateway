@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Three new providers, all OpenAI-compatible and reusing `OpenAIProvider`
+  (no new adapter classes needed, same as Groq): **Gemini** (`GEMINI_API_KEY`;
+  `gemini-2.0-flash`, `gemini-2.5-pro`), **DeepSeek** (`DEEPSEEK_API_KEY`,
+  configurable `DEEPSEEK_BASE_URL`; `deepseek-chat`, `deepseek-reasoner`), and
+  **Ollama** (local/self-hosted; `llama3.2`). `DEEPSEEK_BASE_URL` being a
+  plain Settings field means pointing it at any other OpenAI-compatible host
+  (e.g. OpenCode Go, using that service's key in `DEEPSEEK_API_KEY`) needs no
+  code change. Ollama is opt-in via `OLLAMA_ENABLED` (no key implies
+  "configured" the way it does for the others) and needs no API key by
+  default — `OpenAIProvider.api_key` is now optional, omitting the
+  `Authorization` header entirely when unset. An unreachable Ollama at
+  startup logs a warning without blocking startup or crashing the gateway.
 - Per-model pricing (`ModelPricing`, input/output priced separately) for all
   configured models, verified against each provider's pricing page on
   2026-08-13. `usage_logs.estimated_cost` was previously always `$0.00`

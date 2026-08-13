@@ -1,10 +1,10 @@
 # LLM Gateway
 
 An API gateway between client applications and LLM providers (OpenAI, Anthropic,
-Mistral, Groq). Clients authenticate with **virtual API keys**; the gateway
-handles routing by priority, fallback across providers, Redis response caching,
-rate limiting, usage accounting, and SSE streaming — behind one OpenAI-compatible
-endpoint.
+Mistral, Groq, Gemini, DeepSeek, and local/self-hosted Ollama). Clients
+authenticate with **virtual API keys**; the gateway handles routing by
+priority, fallback across providers, Redis response caching, rate limiting,
+usage accounting, and SSE streaming — behind one OpenAI-compatible endpoint.
 
 ## Prerequisites
 
@@ -12,7 +12,9 @@ endpoint.
   [Docker Compose](https://docs.docker.com/compose/install/) (the whole stack
   runs in containers)
 - [Git](https://git-scm.com/)
-- At least one provider API key (OpenAI, Anthropic, Mistral, or Groq)
+- At least one provider API key (OpenAI, Anthropic, Mistral, Groq, Gemini, or
+  DeepSeek) — or a locally running [Ollama](https://ollama.com) instance,
+  which needs no key at all
 
 ## 1. Clone and configure
 
@@ -26,7 +28,9 @@ Edit `.env` and fill in at least one provider key:
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `MISTRAL_API_KEY` / `GROQ_API_KEY` | Provider credentials; a provider is enabled only if its key is set |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `MISTRAL_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` | Provider credentials; a provider is enabled only if its key is set |
+| `DEEPSEEK_BASE_URL` | DeepSeek endpoint (default: `https://api.deepseek.com/v1`) — override to route through any OpenAI-compatible host using a DeepSeek-shaped key, e.g. OpenCode Go |
+| `OLLAMA_ENABLED` / `OLLAMA_BASE_URL` / `OLLAMA_API_KEY` | Local/self-hosted Ollama: disabled by default (no key implies "configured" the way it does for the others, so it needs an explicit opt-in); `OLLAMA_API_KEY` is optional, for secured deployments only |
 | `DATABASE_URL` | Postgres DSN — the default (`postgresql+asyncpg://gateway:gateway@postgres:5432/llm_gateway`) matches the bundled compose stack |
 | `REDIS_URL` | Redis DSN — default matches the bundled `redis` service |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials for the bundled `postgres` container (default: `gateway` / `gateway` / `llm_gateway`, matching the `DATABASE_URL` default above); not read by the gateway itself — set them only if you change `DATABASE_URL` to match |
@@ -70,10 +74,14 @@ treat it as defense in depth.
   per model, with separate input/output rates, from `providers/factory.py`'s
   pricing tables — verified against each provider's public pricing page on
   2026-08-13. Prices change; re-verify periodically, since a stale (too-low)
-  number defeats the point of tracking cost. Two of the eight configured
-  models (`claude-3-5-sonnet-latest`, `llama-3.1-70b-versatile`) are no longer
-  listed on their provider's current pricing page — their rates use the
-  closest available same-tier figure, noted in a comment at the pricing table.
+  number defeats the point of tracking cost. Four of the twelve configured
+  models (`claude-3-5-sonnet-latest`, `llama-3.1-70b-versatile`,
+  `deepseek-chat`, `deepseek-reasoner`) are no longer listed on their
+  provider's current pricing page — their rates use the closest available
+  same-tier figure or well-documented historical launch pricing, noted in a
+  comment at the pricing table. **Ollama is the one deliberate exception**:
+  local inference has no per-token billing, so it's priced at `$0.00` by
+  design, not by omission.
 - **`MAX_TOKENS_PER_REQUEST`** (default 4096) caps `max_tokens` on every
   request: values above it are rejected with `400`, and requests that omit
   `max_tokens` get this value instead of an unbounded provider default.
@@ -88,6 +96,11 @@ treat it as defense in depth.
   now expires the key after 90 days (`llm-gateway create-key --no-expiry` for
   a permanent key) — a leaked key with no expiry can otherwise be used
   indefinitely against your real provider accounts.
+- **Ollama is opt-in** (`OLLAMA_ENABLED=true`), unlike the credential-gated
+  providers — otherwise every deployment would silently register a provider
+  pointed at `localhost:11434` whether or not Ollama is actually running. If
+  it's enabled but unreachable at startup, the gateway logs a warning and
+  starts normally anyway; it never crashes on Ollama being down.
 - **Streaming responses are cached too**, not just non-streaming ones: an
   identical `stream: true` request replays the cached response as a synthetic
   SSE stream instead of calling the provider again. Concurrent identical
@@ -190,7 +203,10 @@ curl -H "Authorization: Bearer sk-YOUR_VIRTUAL_KEY" http://localhost:8000/v1/mod
 Model names depend on which providers you configured: `gpt-4o` / `gpt-4o-mini`
 (OpenAI), `claude-3-5-sonnet-latest` / `claude-3-5-haiku-latest` (Anthropic),
 `llama-3.1-70b-versatile` / `llama-3.1-8b-instant` (Groq),
-`mistral-large-latest` / `mistral-small-latest` (Mistral).
+`mistral-large-latest` / `mistral-small-latest` (Mistral),
+`gemini-2.0-flash` / `gemini-2.5-pro` (Gemini),
+`deepseek-chat` / `deepseek-reasoner` (DeepSeek), `llama3.2` (Ollama, or
+whatever you've pulled locally — only `llama3.2` is pre-registered).
 
 **Supported request fields:** `model`, `messages`, `temperature`, `max_tokens`,
 `stream`. This is a subset of the OpenAI Chat Completions API — there is no

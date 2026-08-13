@@ -6,6 +6,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -28,13 +29,38 @@ settings = get_settings()
 logger = get_logger("main")
 
 
+async def _ollama_healthcheck() -> bool | None:
+    """Best-effort reachability check for a locally-configured Ollama instance.
+
+    Returns None (and is omitted from the startup log) when Ollama isn't
+    enabled. Never raises: Ollama being down at startup is expected (it's a
+    local, self-hosted dependency, not a paid API) and must not prevent the
+    gateway itself from starting — the provider still gets registered and
+    request-time calls fail normally like any other unreachable provider.
+    """
+    if not settings.OLLAMA_ENABLED:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/models")
+        return response.status_code < 500
+    except Exception:
+        return False
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Open connections on startup and close them (including the provider registry) on shutdown."""
     configure_logging(settings.LOG_LEVEL)
     redis_ok = await redis_healthcheck()
     db_ok = await health.database_ok()
-    logger.info("startup_complete", redis=redis_ok, database=db_ok)
+    ollama_ok = await _ollama_healthcheck()
+    if ollama_ok is False:
+        logger.warning("ollama_unreachable_at_startup", base_url=settings.OLLAMA_BASE_URL)
+    log_fields = {"redis": redis_ok, "database": db_ok}
+    if ollama_ok is not None:
+        log_fields["ollama"] = ollama_ok
+    logger.info("startup_complete", **log_fields)
     yield
     await chat.close_registry()
     await close_redis()

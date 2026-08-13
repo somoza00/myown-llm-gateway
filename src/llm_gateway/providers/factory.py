@@ -20,6 +20,16 @@ from llm_gateway.providers.openai import OpenAIProvider
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_SUPPORTED_MODELS = ["llama-3.1-70b-versatile", "llama-3.1-8b-instant"]
 
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_SUPPORTED_MODELS = ["gemini-2.0-flash", "gemini-2.5-pro"]
+
+DEEPSEEK_SUPPORTED_MODELS = ["deepseek-chat", "deepseek-reasoner"]
+
+# No default models list constant for Ollama: it's whatever the operator has
+# pulled locally. llama3.2 is registered as the one every fresh `ollama pull`
+# setup is expected to have, per the task's default-model requirement.
+OLLAMA_SUPPORTED_MODELS = ["llama3.2"]
+
 # USD per 1,000,000 tokens, verified against each provider's public pricing page
 # on 2026-08-13. Pricing changes over time and isn't queryable from the APIs
 # themselves — re-verify periodically, since a stale (too-low) number here
@@ -31,6 +41,15 @@ GROQ_SUPPORTED_MODELS = ["llama-3.1-70b-versatile", "llama-3.1-8b-instant"]
 # llama-3.1-70b-versatile is similarly absent from Groq's current docs in favor
 # of llama-3.3-70b-versatile; the figure below uses that same-tier replacement's
 # rate as the closest available proxy.
+#
+# gemini-2.0-flash is marked deprecated (shutdown 2026-06-01) on Google's
+# current pricing page but still listed with pricing, used as-is.
+# deepseek-chat / deepseek-reasoner (V3/R1 generation) have been fully
+# superseded by deepseek-v4-flash/-pro on DeepSeek's current pricing page, with
+# no historical rate published there anymore; the figures below are those
+# models' well-documented launch pricing, carried forward as the best
+# available estimate — re-verify against DeepSeek's docs before trusting them
+# for real budgeting.
 OPENAI_PRICING = {
     "gpt-4o": ModelPricing(input_cost_per_1m=2.50, output_cost_per_1m=10.00),
     "gpt-4o-mini": ModelPricing(input_cost_per_1m=0.15, output_cost_per_1m=0.60),
@@ -47,6 +66,16 @@ MISTRAL_PRICING = {
     "mistral-large-latest": ModelPricing(input_cost_per_1m=0.50, output_cost_per_1m=1.50),
     "mistral-small-latest": ModelPricing(input_cost_per_1m=0.15, output_cost_per_1m=0.60),
 }
+GEMINI_PRICING = {
+    "gemini-2.0-flash": ModelPricing(input_cost_per_1m=0.10, output_cost_per_1m=0.40),
+    "gemini-2.5-pro": ModelPricing(input_cost_per_1m=1.25, output_cost_per_1m=10.00),
+}
+DEEPSEEK_PRICING = {
+    "deepseek-chat": ModelPricing(input_cost_per_1m=0.27, output_cost_per_1m=1.10),
+    "deepseek-reasoner": ModelPricing(input_cost_per_1m=0.55, output_cost_per_1m=2.19),
+}
+# Local inference: no billing, regardless of which model is pulled.
+OLLAMA_PRICING: dict[str, ModelPricing] = {}
 
 
 def _config(
@@ -120,6 +149,37 @@ def build_registry(settings: Settings | None = None) -> ProviderRegistry:
                 _config("mistral", MISTRAL_BASE_URL, MISTRAL_MODELS, MISTRAL_PRICING),
                 client,
                 api_key=settings.MISTRAL_API_KEY,
+            )
+        )
+    if settings.GEMINI_API_KEY:
+        providers.append(
+            OpenAIProvider(
+                _config("gemini", GEMINI_BASE_URL, GEMINI_SUPPORTED_MODELS, GEMINI_PRICING),
+                client,
+                api_key=settings.GEMINI_API_KEY,
+            )
+        )
+    if settings.DEEPSEEK_API_KEY:
+        providers.append(
+            OpenAIProvider(
+                _config(
+                    "deepseek",
+                    settings.DEEPSEEK_BASE_URL,
+                    DEEPSEEK_SUPPORTED_MODELS,
+                    DEEPSEEK_PRICING,
+                ),
+                client,
+                api_key=settings.DEEPSEEK_API_KEY,
+            )
+        )
+    if settings.OLLAMA_ENABLED:
+        providers.append(
+            OpenAIProvider(
+                _config(
+                    "ollama", settings.OLLAMA_BASE_URL, OLLAMA_SUPPORTED_MODELS, OLLAMA_PRICING
+                ),
+                client,
+                api_key=settings.OLLAMA_API_KEY,
             )
         )
     return ProviderRegistry(providers, client)

@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str | None = None
     MISTRAL_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
+    DEEPSEEK_API_KEY: str | None = None
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
+
+    # Ollama is local/self-hosted, not credential-gated like the others, so it's
+    # opt-in via a flag rather than "enabled because a key is set". Left off by
+    # default: most people who clone this repo won't have Ollama running, and
+    # registering it unconditionally would mean a provider that's silently
+    # unreachable for everyone who didn't ask for it.
+    OLLAMA_ENABLED: bool = False
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    OLLAMA_API_KEY: str | None = None
 
     CACHE_TTL_SECONDS: int = 300
 
