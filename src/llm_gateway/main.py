@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from llm_gateway.core.config import get_settings
-from llm_gateway.core.logging import configure_logging, get_logger
+from llm_gateway.core.logging import (
+    bind_request_context,
+    clear_request_context,
+    configure_logging,
+    get_logger,
+)
 from llm_gateway.routers import chat, health, models
 from llm_gateway.storage.database import dispose_engine
 from llm_gateway.storage.redis import close_redis
 from llm_gateway.storage.redis import healthcheck as redis_healthcheck
+
+REQUEST_ID_HEADER = "X-Request-ID"
 
 settings = get_settings()
 logger = get_logger("main")
@@ -34,6 +42,21 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("shutdown_complete")
 
 
+async def _request_id_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Bind a request id (client-supplied or generated) to every log line for this
+    request, and echo it back in the response header for cross-referencing."""
+    request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+    bind_request_context(request_id=request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        clear_request_context()
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
+
+
 async def _openai_style_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
     """Normalize HTTPException responses to the OpenAI-compatible {"error": {...}} envelope."""
     assert isinstance(exc, HTTPException)
@@ -47,6 +70,7 @@ async def _openai_style_exception_handler(_request: Request, exc: Exception) -> 
 def create_app() -> FastAPI:
     """Build the FastAPI application with all routers and the lifespan handler."""
     app = FastAPI(title="LLM Gateway", version="0.1.0", lifespan=lifespan)
+    app.middleware("http")(_request_id_middleware)
     app.add_exception_handler(HTTPException, _openai_style_exception_handler)
     app.include_router(chat.router)
     app.include_router(health.router)

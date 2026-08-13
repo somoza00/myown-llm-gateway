@@ -20,6 +20,9 @@ async def execute_with_fallback(
         try:
             response = await provider.chat_completion(request)
         except ProviderAuthError:
+            # Auth here means *our* configured credential for this provider is bad,
+            # not the caller's virtual key (already verified before routing) — so
+            # skipping to the next provider is safe and doesn't burn caller attempts.
             logger.warning("provider_auth_failed", provider=provider.config.name)
             continue
         except ProviderError:

@@ -56,6 +56,39 @@ curl http://localhost:8000/health          # {"status":"ok"}
 curl http://localhost:8000/health/ready    # Redis + database checks
 ```
 
+## Using the published image instead of building locally
+
+Every push of a `v*` tag (e.g. `v0.1.0`) publishes a Docker image to the GitHub
+Container Registry via `.github/workflows/ci.yml`'s `publish` job, tagged with
+both the exact version and `latest`:
+
+```bash
+docker pull ghcr.io/somoza00/myown-llm-gateway:latest
+# or a pinned version:
+docker pull ghcr.io/somoza00/myown-llm-gateway:v0.1.0
+```
+
+To run the compose stack against the published image instead of building
+locally, replace the `gateway` service's `build: .` with `image:` in
+`docker-compose.yml` (or in a `docker-compose.override.yml` so the change
+doesn't touch the tracked file):
+
+```yaml
+services:
+  gateway:
+    image: ghcr.io/somoza00/myown-llm-gateway:latest
+    # remove or comment out the "build: ." line
+```
+
+Then `cp .env.example .env` (see step 1) and run:
+
+```bash
+docker compose up
+```
+
+Everything else — migrations on start, health checks, virtual-key creation —
+works identically to the locally-built image.
+
 ## 3. Create a virtual key
 
 ```bash
@@ -115,6 +148,12 @@ Model names depend on which providers you configured: `gpt-4o` / `gpt-4o-mini`
 (OpenAI), `claude-3-5-sonnet-latest` / `claude-3-5-haiku-latest` (Anthropic),
 `llama-3.1-70b-versatile` / `llama-3.1-8b-instant` (Groq),
 `mistral-large-latest` / `mistral-small-latest` (Mistral).
+
+**Supported request fields:** `model`, `messages`, `temperature`, `max_tokens`,
+`stream`. This is a subset of the OpenAI Chat Completions API — there is no
+support (yet) for tool/function calling, `n` (multiple choices), `stop`,
+`response_format`, `seed`, or multimodal content. A client built against the
+full OpenAI API may need to drop unsupported fields before calling this gateway.
 
 ## 5. Run the tests
 

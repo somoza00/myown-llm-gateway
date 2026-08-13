@@ -176,6 +176,12 @@ async def test_health_ready_ok_when_redis_and_db_up(client, monkeypatch) -> None
     resp = await client.get("/health/ready")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ready", "redis": True, "database": True}
+    assert resp.headers["x-request-id"]  # wired into the real app, not just unit-tested
+
+
+async def test_request_id_is_echoed_back_when_client_supplies_one(client) -> None:
+    resp = await client.get("/health", headers={"X-Request-ID": "caller-supplied-123"})
+    assert resp.headers["x-request-id"] == "caller-supplied-123"
 
 
 async def test_health_ready_degraded_when_redis_down(client, monkeypatch) -> None:
