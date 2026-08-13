@@ -42,6 +42,7 @@ class OpenAIProvider(BaseProvider):
         """Stream chat completion chunks in OpenAI SSE format (passthrough)."""
         payload = request.model_dump(exclude_none=True)
         payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
         async for line in self._iter_sse_lines(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},

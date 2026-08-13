@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from redis.exceptions import RedisError
+from structlog.testing import capture_logs
 
 from llm_gateway.core import rate_limiter
 
@@ -140,3 +141,16 @@ async def test_entries_outside_the_window_are_pruned(monkeypatch) -> None:
 async def test_redis_failure_fails_open(monkeypatch) -> None:
     monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
+
+
+async def test_redis_failure_logs_warning_with_key_and_error(monkeypatch) -> None:
+    monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
+    with capture_logs() as logs:
+        assert await rate_limiter.check_rate_limit(virtual_key_id=42) is True
+
+    assert len(logs) == 1
+    entry = logs[0]
+    assert entry["log_level"] == "warning"
+    assert entry["event"] == "rate_limit_check_failed"
+    assert entry["virtual_key_id"] == 42
+    assert entry["error"] == "redis is down"

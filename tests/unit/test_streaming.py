@@ -154,18 +154,27 @@ async def test_anthropic_stream_translates_to_openai_format() -> None:
 # A real upstream SSE body: each "data: ..." line is followed by a blank line.
 # httpx's aiter_lines() yields both the content line and the blank separator,
 # so the passthrough must drop the blank ones instead of re-wrapping them.
+# The final chunk carries `usage` because the request sets
+# stream_options.include_usage — without it, OpenAI/Groq/Mistral omit usage
+# entirely from the stream and every logged token count would be zero.
 RAW_OPENAI_SSE = (
     'data: {"id":"1","choices":[{"delta":{"content":"Hel"}}]}\n'
     "\n"
     'data: {"id":"1","choices":[{"delta":{"content":"lo"}}]}\n'
+    "\n"
+    'data: {"id":"1","choices":[],'
+    '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n'
     "\n"
     "data: [DONE]\n"
     "\n"
 )
 
 
-async def test_openai_stream_drops_blank_separator_lines() -> None:
+async def test_openai_stream_drops_blank_separator_lines_and_requests_usage() -> None:
+    captured: dict = {}
+
     def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
         return httpx.Response(
             200, text=RAW_OPENAI_SSE, headers={"Content-Type": "text/event-stream"}
         )
@@ -180,12 +189,21 @@ async def test_openai_stream_drops_blank_separator_lines() -> None:
     assert chunks == [
         'data: {"id":"1","choices":[{"delta":{"content":"Hel"}}]}\n\n',
         'data: {"id":"1","choices":[{"delta":{"content":"lo"}}]}\n\n',
+        'data: {"id":"1","choices":[],'
+        '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
         "data: [DONE]\n\n",
     ]
+    usage = capture_usage(chunks[-2], Usage())
+    assert usage == Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
+
+    assert captured["body"]["stream_options"] == {"include_usage": True}
 
 
-async def test_mistral_stream_drops_blank_separator_lines() -> None:
+async def test_mistral_stream_drops_blank_separator_lines_and_requests_usage() -> None:
+    captured: dict = {}
+
     def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
         return httpx.Response(
             200, text=RAW_OPENAI_SSE, headers={"Content-Type": "text/event-stream"}
         )
@@ -200,5 +218,11 @@ async def test_mistral_stream_drops_blank_separator_lines() -> None:
     assert chunks == [
         'data: {"id":"1","choices":[{"delta":{"content":"Hel"}}]}\n\n',
         'data: {"id":"1","choices":[{"delta":{"content":"lo"}}]}\n\n',
+        'data: {"id":"1","choices":[],'
+        '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
         "data: [DONE]\n\n",
     ]
+    usage = capture_usage(chunks[-2], Usage())
+    assert usage == Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
+
+    assert captured["body"]["stream_options"] == {"include_usage": True}

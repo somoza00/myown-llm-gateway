@@ -34,7 +34,7 @@ async def check_rate_limit(virtual_key_id: int) -> bool:
             pipe.zcard(key)
             pipe.expire(key, settings.RATE_LIMIT_WINDOW_SECONDS)
             _, _, count, _ = await pipe.execute()
-    except RedisError:
-        logger.warning("rate_limit_check_failed", virtual_key_id=virtual_key_id)
+    except RedisError as exc:
+        logger.warning("rate_limit_check_failed", virtual_key_id=virtual_key_id, error=str(exc))
         return True
     return bool(count <= settings.RATE_LIMIT_REQUESTS)

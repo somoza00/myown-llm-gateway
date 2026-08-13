@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import respx
@@ -119,7 +120,7 @@ async def test_chat_completions_rate_limited(
 
 
 @respx.mock
-async def test_chat_completions_streaming_flow(client, registry, api_key) -> None:
+async def test_chat_completions_streaming_flow(client, registry, redis_stub, api_key) -> None:
     route = respx.post(OPENAI_CHAT_URL).mock(
         return_value=httpx.Response(
             200, text=OPENAI_STREAM, headers={"Content-Type": "text/event-stream"}
@@ -146,6 +147,7 @@ async def test_chat_completions_streaming_flow(client, registry, api_key) -> Non
     assert '"content":"ola"' in data_lines[0]
     assert data_lines[-1] == "data: [DONE]"
     assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["stream_options"] == {"include_usage": True}
 
     # Each SSE frame is "data: ...\n\n" with nothing else in between: httpx's
     # aiter_lines() also yields the blank separator line from the raw upstream
