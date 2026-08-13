@@ -13,6 +13,11 @@ from llm_gateway.storage.redis import redis_client
 
 settings = get_settings()
 
+# Provider name attributed to usage_logs rows that didn't trigger a real
+# upstream call: Redis cache hits, single-flight followers, and (for streaming)
+# replayed cache hits. Shared by services/gateway.py and services/streaming.py.
+CACHE_PROVIDER_NAME = "cache"
+
 
 def build_cache_key(request: ChatRequest) -> str:
     """Return a stable SHA-256 cache key derived from the request body."""

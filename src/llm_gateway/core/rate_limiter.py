@@ -20,8 +20,9 @@ async def check_rate_limit(virtual_key_id: int) -> bool:
 
     Uses a Redis sorted set per key: each call's timestamp is a member, entries
     older than the window are pruned first, and the remaining count is compared
-    against the configured limit. Fails open (allows the request) on Redis
-    errors, consistent with the response cache.
+    against the configured limit. On Redis errors, the outcome is controlled by
+    `Settings.RATE_LIMIT_FAIL_OPEN` (default False: reject rather than let an
+    outage turn into unmetered request volume).
     """
     key = f"ratelimit:{virtual_key_id}"
     now = time.time()
@@ -36,5 +37,5 @@ async def check_rate_limit(virtual_key_id: int) -> bool:
             _, _, count, _ = await pipe.execute()
     except RedisError as exc:
         logger.warning("rate_limit_check_failed", virtual_key_id=virtual_key_id, error=str(exc))
-        return True
+        return settings.RATE_LIMIT_FAIL_OPEN
     return bool(count <= settings.RATE_LIMIT_REQUESTS)

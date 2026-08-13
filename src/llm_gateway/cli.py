@@ -10,6 +10,12 @@ import secrets
 import sys
 from datetime import UTC, datetime, timedelta
 
+# Keys never expiring by default is a real cost/security risk for a project
+# meant to be cloned and run by anyone: a leaked key with no expiry can be
+# used against the operator's real provider accounts indefinitely. `create-key`
+# expires after this many days unless --no-expiry is passed explicitly.
+DEFAULT_KEY_EXPIRY_DAYS = 90
+
 
 def _serve() -> None:
     from llm_gateway.main import run
@@ -52,6 +58,8 @@ async def _create_key(client_name: str, *, expires_in_days: int | None = None) -
     print("\nStore it now — only its hash is persisted, it cannot be recovered later.")
     if expires_at:
         print(f"Expires at: {expires_at.isoformat()}")
+    else:
+        print("This key never expires (created with --no-expiry).")
 
 
 async def _revoke_key(key_id: int) -> None:
@@ -102,7 +110,13 @@ def main() -> None:
         "--expires-in-days",
         type=int,
         default=None,
-        help="Optional expiry; the key stops authenticating after this many days.",
+        help=f"Key expiry in days (default: {DEFAULT_KEY_EXPIRY_DAYS}).",
+    )
+    create_key_parser.add_argument(
+        "--no-expiry",
+        action="store_true",
+        help="Create a permanent key that never expires. Not recommended: a leaked "
+        "key with no expiry can be used indefinitely against your provider accounts.",
     )
 
     revoke_key_parser = subparsers.add_parser(
@@ -117,7 +131,12 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "create-key":
-        asyncio.run(_create_key(args.client_name, expires_in_days=args.expires_in_days))
+        if args.no_expiry and args.expires_in_days is not None:
+            parser.error("--no-expiry and --expires-in-days are mutually exclusive")
+        expires_in_days = (
+            None if args.no_expiry else (args.expires_in_days or DEFAULT_KEY_EXPIRY_DAYS)
+        )
+        asyncio.run(_create_key(args.client_name, expires_in_days=expires_in_days))
     elif args.command == "revoke-key":
         asyncio.run(_revoke_key(args.key_id))
     elif args.command == "list-keys":

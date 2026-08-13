@@ -99,7 +99,8 @@ def test_create_key_subcommand_dispatches(monkeypatch) -> None:
         "sys.argv", ["llm-gateway", "create-key", "--client-name", "acme"]
     )
     cli.main()
-    assert called == {"client_name": "acme", "expires_in_days": None}
+    # No --expires-in-days / --no-expiry given: falls back to the safe default.
+    assert called == {"client_name": "acme", "expires_in_days": cli.DEFAULT_KEY_EXPIRY_DAYS}
 
 
 def test_create_key_subcommand_passes_expires_in_days(monkeypatch) -> None:

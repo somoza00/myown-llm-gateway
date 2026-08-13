@@ -31,6 +31,8 @@ Edit `.env` and fill in at least one provider key:
 | `REDIS_URL` | Redis DSN — default matches the bundled `redis` service |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials for the bundled `postgres` container (default: `gateway` / `gateway` / `llm_gateway`, matching the `DATABASE_URL` default above); not read by the gateway itself — set them only if you change `DATABASE_URL` to match |
 | `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` | Per-key rate limit (default: 60 requests / 60 s) |
+| `RATE_LIMIT_FAIL_OPEN` | If Redis is unreachable, allow requests through unmetered (`true`) or reject them (`false`, the default) — see [Cost protection](#cost-protection) |
+| `MAX_TOKENS_PER_REQUEST` | Hard ceiling on `max_tokens` per request; also the value used when a request omits `max_tokens` (default: 4096) |
 | `CACHE_TTL_SECONDS` | Response cache TTL (default: 300 s) |
 | `GATEWAY_PORT` | Host port for the API (default: 8000) |
 
@@ -55,6 +57,44 @@ Wait until the health check passes, then verify:
 curl http://localhost:8000/health          # {"status":"ok"}
 curl http://localhost:8000/health/ready    # Redis + database checks
 ```
+
+## Cost protection
+
+This gateway proxies to paid provider APIs — the guardrails below exist so that
+running it (especially the default config, out of the box) doesn't produce a
+surprise bill. None of this is a substitute for provider-side spend alerts;
+treat it as defense in depth.
+
+- **Real per-model pricing.** `usage_logs.estimated_cost` used to always be
+  `$0.00` for every provider (cost was never configured). It's now computed
+  per model, with separate input/output rates, from `providers/factory.py`'s
+  pricing tables — verified against each provider's public pricing page on
+  2026-08-13. Prices change; re-verify periodically, since a stale (too-low)
+  number defeats the point of tracking cost. Two of the eight configured
+  models (`claude-3-5-sonnet-latest`, `llama-3.1-70b-versatile`) are no longer
+  listed on their provider's current pricing page — their rates use the
+  closest available same-tier figure, noted in a comment at the pricing table.
+- **`MAX_TOKENS_PER_REQUEST`** (default 4096) caps `max_tokens` on every
+  request: values above it are rejected with `400`, and requests that omit
+  `max_tokens` get this value instead of an unbounded provider default.
+  `messages` is also capped at 100 entries and each message at 50,000
+  characters — coarse guards against a single oversized request.
+- **`RATE_LIMIT_FAIL_OPEN`** (default `false`) controls what happens if Redis
+  is unreachable: by default the rate limiter fails *closed* (rejects
+  requests) rather than letting an outage turn into unmetered volume. Set it
+  to `true` if you'd rather trade cost protection for availability during a
+  Redis blip.
+- **Virtual keys expire by default.** `create-key` without `--expires-in-days`
+  now expires the key after 90 days (`llm-gateway create-key --no-expiry` for
+  a permanent key) — a leaked key with no expiry can otherwise be used
+  indefinitely against your real provider accounts.
+- **Streaming responses are cached too**, not just non-streaming ones: an
+  identical `stream: true` request replays the cached response as a synthetic
+  SSE stream instead of calling the provider again. Concurrent identical
+  *non-streaming* cache misses are also coalesced (single-flight — only the
+  first triggers a provider call, the rest await its result); this does not
+  extend to concurrent streaming misses, which each still call the provider
+  until one completes and populates the cache for the next request.
 
 ## Using the published image instead of building locally
 
@@ -99,10 +139,13 @@ This prints the raw key once, e.g. `sk-...` — only its SHA-256 hash is stored,
 so it cannot be recovered later. Save it. Use it as the `Authorization` header
 on every request.
 
-Add `--expires-in-days N` to issue a key that stops authenticating after N days:
+Keys expire after **90 days by default** (see [Cost protection](#cost-protection)).
+Use `--expires-in-days N` for a different lifetime, or `--no-expiry` for a
+permanent key:
 
 ```bash
 docker compose exec gateway llm-gateway create-key --client-name "temp-integration" --expires-in-days 30
+docker compose exec gateway llm-gateway create-key --client-name "long-lived-service" --no-expiry
 ```
 
 List keys (metadata only — id, client name, active state, expiry; raw keys are

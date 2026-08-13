@@ -8,16 +8,16 @@ from collections.abc import Coroutine
 from typing import Any
 
 from llm_gateway.models.api import ChatRequest, ChatResponse
+from llm_gateway.models.provider import ModelPricing
 from llm_gateway.providers.factory import ProviderRegistry
 from llm_gateway.services import cache as cache_service
+from llm_gateway.services.cache import CACHE_PROVIDER_NAME
 from llm_gateway.services.fallback import execute_with_fallback
 from llm_gateway.services.metrics import build_usage_record, emit_metric
 from llm_gateway.services.router import select_providers
 from llm_gateway.services.usage import persist_usage
 
 _background_tasks: set[asyncio.Task[Any]] = set()
-
-CACHE_PROVIDER_NAME = "cache"
 
 # In-flight request coalescing ("single-flight"): while a cache-miss request for a
 # given cache key is being served by a provider, identical concurrent requests await
@@ -43,7 +43,7 @@ def _record_cache_style_usage(
     record = build_usage_record(
         virtual_key_id=virtual_key_id,
         provider_name=CACHE_PROVIDER_NAME,
-        cost_per_token=0.0,
+        pricing=ModelPricing(),
         model=response.model,
         usage=response.usage,
         latency_ms=latency_ms,
@@ -99,7 +99,7 @@ async def handle_chat_completion(
     record = build_usage_record(
         virtual_key_id=virtual_key_id,
         provider_name=serving_provider.config.name,
-        cost_per_token=serving_provider.config.cost_per_token,
+        pricing=serving_provider.config.pricing_for(response.model),
         model=response.model,
         usage=response.usage,
         latency_ms=latency_ms,

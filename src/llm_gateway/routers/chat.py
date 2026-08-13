@@ -21,11 +21,15 @@ from llm_gateway.core.security import authenticate_virtual_key
 from llm_gateway.models.api import ChatRequest, ChatResponse, Usage
 from llm_gateway.providers.base import BaseProvider
 from llm_gateway.providers.factory import ProviderRegistry, build_registry
+from llm_gateway.services import cache as cache_service
 from llm_gateway.services.gateway import handle_chat_completion
 from llm_gateway.services.streaming import (
+    ChunkAccumulator,
     capture_usage,
+    schedule_cached_stream_usage,
     schedule_stream_usage,
     stream_chat_completion,
+    synthesize_cached_stream,
 )
 from llm_gateway.storage.repositories import get_key_by_hash
 
@@ -83,11 +87,33 @@ async def enforce_rate_limit(virtual_key_id: int = Depends(authenticate_request)
     return virtual_key_id
 
 
+def _enforce_max_tokens(body: ChatRequest) -> ChatRequest:
+    """Cap `max_tokens` at the configured ceiling: reject requests that ask for more,
+    and fill in the ceiling when the client didn't specify a value at all (an omitted
+    `max_tokens` would otherwise fall back to an unbounded provider default)."""
+    limit = get_settings().MAX_TOKENS_PER_REQUEST
+    if body.max_tokens is not None and body.max_tokens > limit:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": {
+                    "message": f"max_tokens ({body.max_tokens}) exceeds the configured "
+                    f"limit ({limit})",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+    if body.max_tokens is None:
+        return body.model_copy(update={"max_tokens": limit})
+    return body
+
+
 @router.post("/v1/chat/completions", response_model=ChatResponse)
 async def chat_completions(
     body: ChatRequest, virtual_key_id: int = Depends(enforce_rate_limit)
 ) -> Response | ChatResponse:
     """Serve a chat completion: authenticate, then delegate to the gateway service."""
+    body = _enforce_max_tokens(body)
     if body.stream:
         return StreamingResponse(
             _stream_response(body, get_registry(), virtual_key_id=virtual_key_id),
@@ -122,16 +148,42 @@ async def chat_completions(
 async def _stream_response(
     request: ChatRequest, registry: ProviderRegistry, *, virtual_key_id: int
 ) -> AsyncIterator[str]:
-    """Relay provider SSE chunks to the client, then record usage (fire-and-forget)."""
+    """Relay provider SSE chunks to the client, then record usage (fire-and-forget).
+
+    Cache-first like the non-streaming path: an identical cached response is
+    replayed as a synthetic SSE stream instead of calling the provider again,
+    and a successful miss is written to cache for the next identical request.
+    Concurrent identical in-flight streaming requests are NOT coalesced (unlike
+    the non-streaming path's single-flight) — fanning out one real stream to
+    multiple waiting clients is materially harder to get right and isn't
+    implemented here; only repeat requests after one has already completed
+    (and been cached) are deduplicated.
+    """
     started = time.monotonic()
+    cache_key = cache_service.build_cache_key(request)
+    cached = await cache_service.get(cache_key)
+    if cached is not None:
+        for line in synthesize_cached_stream(cached):
+            yield line
+        schedule_cached_stream_usage(
+            virtual_key_id=virtual_key_id,
+            response=cached,
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+        return
+
     serving_provider: BaseProvider | None = None
     usage = Usage()
+    accumulator = ChunkAccumulator()
+    success = False
     try:
         async for provider, line in stream_chat_completion(request, registry):
             if serving_provider is None:
                 serving_provider = provider
             usage = capture_usage(line, usage)
+            accumulator.feed(line)
             yield line
+        success = True
     except NoProviderAvailableError as exc:
         yield _sse_error(
             "No provider available", "server_error", attempted_providers=exc.attempted_providers
@@ -147,6 +199,8 @@ async def _stream_response(
                 usage=usage,
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
+        if success and accumulator.saw_any_chunk:
+            await cache_service.set(cache_key, accumulator.to_response())
 
 
 def _sse_error(

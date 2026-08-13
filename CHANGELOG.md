@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Per-model pricing (`ModelPricing`, input/output priced separately) for all
+  configured models, verified against each provider's pricing page on
+  2026-08-13. `usage_logs.estimated_cost` was previously always `$0.00`
+  because no provider had pricing configured.
+- `Settings.MAX_TOKENS_PER_REQUEST` (default 4096): requests with `max_tokens`
+  above it are rejected with `400`; requests that omit `max_tokens` get this
+  value instead of an unbounded provider default. `ChatRequest.messages` is
+  capped at 100 entries, each message's `content` at 50,000 characters.
+- Streaming responses (`stream: true`) are now cached like non-streaming ones:
+  an identical request replays the cached response as a synthetic SSE stream
+  instead of calling the provider again. Concurrent in-flight streaming misses
+  are not coalesced (unlike the non-streaming path's single-flight) — each
+  still reaches the provider until the first one completes and caches.
+
+### Changed
+- `RATE_LIMIT_FAIL_OPEN` defaults to `false`: if Redis is unreachable, the
+  rate limiter now rejects requests instead of letting the outage turn into
+  unmetered request volume. Set it to `true` to restore the previous
+  fail-open behavior.
+- `create-key` now defaults to a 90-day expiry instead of never expiring;
+  pass `--no-expiry` for the previous (permanent-key) behavior.
+
 ## [0.1.0] - 2026-08-13
 
 ### Added

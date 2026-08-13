@@ -168,6 +168,101 @@ async def test_chat_completions_streaming_flow(client, registry, redis_stub, api
     assert logs[-1].output_tokens == 2
 
 
+@respx.mock
+async def test_chat_completions_rejects_max_tokens_over_limit(
+    client, registry, redis_stub, api_key
+) -> None:
+    from llm_gateway.core.config import get_settings
+
+    limit = get_settings().MAX_TOKENS_PER_REQUEST
+    body = {**CHAT_BODY, "max_tokens": limit + 1}
+    # No route registered: if this weren't rejected before reaching a provider,
+    # respx would raise, failing the test loudly instead of hitting the network.
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "invalid_request_error"
+
+
+@respx.mock
+async def test_chat_completions_accepts_max_tokens_at_the_limit(
+    client, registry, redis_stub, api_key
+) -> None:
+    from llm_gateway.core.config import get_settings
+
+    limit = get_settings().MAX_TOKENS_PER_REQUEST
+    route = respx.post(OPENAI_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=openai_response())
+    )
+    body = {**CHAT_BODY, "max_tokens": limit}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 200, resp.text
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_chat_completions_injects_default_max_tokens_when_omitted(
+    client, registry, redis_stub, api_key
+) -> None:
+    from llm_gateway.core.config import get_settings
+
+    route = respx.post(OPENAI_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=openai_response())
+    )
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=CHAT_BODY)
+    assert resp.status_code == 200, resp.text
+    sent_body = json.loads(route.calls[0].request.content)
+    assert sent_body["max_tokens"] == get_settings().MAX_TOKENS_PER_REQUEST
+
+
+@respx.mock
+async def test_streaming_second_identical_request_served_from_cache(
+    client, registry, redis_stub, api_key
+) -> None:
+    route = respx.post(OPENAI_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, text=OPENAI_STREAM, headers={"Content-Type": "text/event-stream"}
+        )
+    )
+    body = {**CHAT_BODY, "stream": True}
+
+    resp1 = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp1.status_code == 200, resp1.text
+    assert route.call_count == 1
+
+    resp2 = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp2.status_code == 200, resp2.text
+    assert route.call_count == 1  # second request did not touch the provider
+
+    data_lines_2 = [ln for ln in resp2.text.splitlines() if ln.startswith("data: ")]
+    assert len(data_lines_2) == 4  # role delta, content delta, finish+usage, [DONE]
+    assert data_lines_2[-1] == "data: [DONE]"
+    chunk_payloads = [json.loads(ln[len("data: ") :]) for ln in data_lines_2[:-1]]
+    full_content = "".join(
+        c["choices"][0]["delta"].get("content", "") for c in chunk_payloads
+    )
+    assert full_content == "ola"
+    assert chunk_payloads[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunk_payloads[-1]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
+
+    await asyncio.sleep(0.05)  # fire-and-forget usage tasks
+    from llm_gateway.storage.database import async_session_factory
+    from llm_gateway.storage.orm import UsageLog
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(UsageLog).where(UsageLog.virtual_key_id == api_key)
+        )
+        logs = result.scalars().all()
+    assert {log.provider for log in logs} == {"openai", "cache"}
+    cache_log = next(log for log in logs if log.provider == "cache")
+    assert cache_log.model == "gpt-4o"
+    assert float(cache_log.estimated_cost) == 0.0
+
+
 async def test_health_ready_ok_when_redis_and_db_up(client, monkeypatch) -> None:
     async def _redis_ok() -> bool:
         return True

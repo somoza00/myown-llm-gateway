@@ -30,6 +30,17 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_REQUESTS: int = 60
     RATE_LIMIT_WINDOW_SECONDS: int = 60
+    # If the rate limiter can't reach Redis, should requests be allowed through
+    # unmetered (True) or rejected (False)? Defaults to rejecting: an operator
+    # who wants availability over cost protection during a Redis outage can
+    # opt in explicitly.
+    RATE_LIMIT_FAIL_OPEN: bool = False
+
+    # Hard ceiling on `max_tokens` per request; requests above it are rejected,
+    # and requests that omit `max_tokens` get this value instead of an
+    # unbounded provider default. Protects against a single request generating
+    # an unexpectedly large (expensive) completion.
+    MAX_TOKENS_PER_REQUEST: int = 4096
 
 
 @lru_cache

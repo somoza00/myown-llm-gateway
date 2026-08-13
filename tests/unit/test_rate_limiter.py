@@ -138,15 +138,22 @@ async def test_entries_outside_the_window_are_pruned(monkeypatch) -> None:
     assert "stale-member" not in fake.sorted_sets["ratelimit:1"]
 
 
-async def test_redis_failure_fails_open(monkeypatch) -> None:
+async def test_redis_failure_fails_closed_by_default(monkeypatch) -> None:
     monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_FAIL_OPEN", False)
+    assert await rate_limiter.check_rate_limit(virtual_key_id=1) is False
+
+
+async def test_redis_failure_fails_open_when_explicitly_configured(monkeypatch) -> None:
+    monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_FAIL_OPEN", True)
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
 
 
 async def test_redis_failure_logs_warning_with_key_and_error(monkeypatch) -> None:
     monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
     with capture_logs() as logs:
-        assert await rate_limiter.check_rate_limit(virtual_key_id=42) is True
+        await rate_limiter.check_rate_limit(virtual_key_id=42)
 
     assert len(logs) == 1
     entry = logs[0]
