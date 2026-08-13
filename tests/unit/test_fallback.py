@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
 
@@ -42,6 +44,12 @@ class StubProvider(BaseProvider):
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
+
+    async def stream_chat_completion(self, request: ChatRequest) -> AsyncIterator[str]:
+        """Not used by these tests; declared to satisfy BaseProvider."""
+        if False:
+            yield ""
+        raise AssertionError("streaming is not used in fallback tests")
 
 
 REQUEST = ChatRequest(model="m", messages=[{"role": "user", "content": "hi"}])

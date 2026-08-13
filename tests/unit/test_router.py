@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 
 from llm_gateway.models.api import ChatRequest, ChatResponse
@@ -21,6 +23,12 @@ class StubProvider(BaseProvider):
         super().__init__(config, httpx.AsyncClient())
 
     async def chat_completion(self, request: ChatRequest) -> ChatResponse:
+        raise AssertionError("selection must not call providers")
+
+    async def stream_chat_completion(self, request: ChatRequest) -> AsyncIterator[str]:
+        """Not used by these tests; declared to satisfy BaseProvider."""
+        if False:
+            yield ""
         raise AssertionError("selection must not call providers")
 
 

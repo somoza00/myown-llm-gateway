@@ -12,6 +12,15 @@ OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 CHAT_BODY = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
 AUTH = {"Authorization": "Bearer test-virt-key"}
 
+OPENAI_STREAM = (
+    'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o",'
+    '"choices":[{"index":0,"delta":{"role":"assistant","content":"ola"},"finish_reason":null}]}\n\n'
+    'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o",'
+    '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+    '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+    "data: [DONE]\n\n"
+)
+
 
 def openai_response() -> dict:
     return {
@@ -107,6 +116,54 @@ async def test_chat_completions_rate_limited(
         assert resp.headers["retry-after"] == "60"
 
     await asyncio.sleep(0.05)  # let the fire-and-forget usage-persist tasks finish
+
+
+@respx.mock
+async def test_chat_completions_streaming_flow(client, registry, api_key) -> None:
+    route = respx.post(OPENAI_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, text=OPENAI_STREAM, headers={"Content-Type": "text/event-stream"}
+        )
+    )
+    from llm_gateway.storage.database import async_session_factory
+    from llm_gateway.storage.orm import UsageLog
+
+    async with async_session_factory() as session:
+        before = len(
+            (
+                await session.execute(
+                    select(UsageLog).where(UsageLog.virtual_key_id == api_key)
+                )
+            ).scalars().all()
+        )
+
+    body = {**CHAT_BODY, "stream": True}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    data_lines = [ln for ln in resp.text.splitlines() if ln.startswith("data: ")]
+    assert len(data_lines) == 3
+    assert '"content":"ola"' in data_lines[0]
+    assert data_lines[-1] == "data: [DONE]"
+    assert route.call_count == 1
+
+    # Each SSE frame is "data: ...\n\n" with nothing else in between: httpx's
+    # aiter_lines() also yields the blank separator line from the raw upstream
+    # body, so a naive passthrough would double-frame every event.
+    assert resp.text == "".join(f"{line}\n\n" for line in data_lines)
+
+    # Usage recorded after the stream completes, taken from the final chunk's `usage` object.
+    await asyncio.sleep(0.05)  # fire-and-forget usage task
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(UsageLog).where(UsageLog.virtual_key_id == api_key)
+        )
+        logs = result.scalars().all()
+    assert len(logs) == before + 1
+    assert logs[-1].provider == "openai"
+    assert logs[-1].model == "gpt-4o"
+    assert logs[-1].input_tokens == 3
+    assert logs[-1].output_tokens == 2
 
 
 async def test_health_ready_ok_when_redis_and_db_up(client, monkeypatch) -> None:

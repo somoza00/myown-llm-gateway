@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 
 from llm_gateway.models.api import ChatRequest, ChatResponse
@@ -35,3 +37,17 @@ class MistralProvider(BaseProvider):
             timeout_seconds=self.config.timeout,
         )
         return self._parse_response(response, ChatResponse.model_validate)
+
+    async def stream_chat_completion(self, request: ChatRequest) -> AsyncIterator[str]:
+        """Stream chat completion chunks in OpenAI SSE format (passthrough)."""
+        payload = request.model_dump(exclude_none=True)
+        payload["stream"] = True
+        async for line in self._iter_sse_lines(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            payload=payload,
+            timeout_seconds=self.config.timeout,
+        ):
+            if not line.startswith("data: "):
+                continue  # httpx.aiter_lines() also yields the blank frame separators
+            yield f"{line}\n\n"
