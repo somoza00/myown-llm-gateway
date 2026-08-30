@@ -36,6 +36,16 @@ class InvalidVirtualKeyError(GatewayError):
 class NoProviderAvailableError(GatewayError):
     """Raised when every provider in the fallback chain has failed for a request."""
 
-    def __init__(self, message: str, *, attempted_providers: list[str]) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempted_providers: list[str],
+        last_error: ProviderError | None = None,
+    ) -> None:
         super().__init__(message)
         self.attempted_providers = attempted_providers
+        # The most recent upstream error from the chain, so the caller can
+        # distinguish a timeout from an outage from bad credentials instead of
+        # collapsing everything into an opaque 502.
+        self.last_error = last_error

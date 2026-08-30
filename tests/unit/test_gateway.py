@@ -77,7 +77,7 @@ async def test_concurrent_identical_misses_coalesce_into_one_provider_call(redis
     assert provider.calls == 1
 
     follower = asyncio.create_task(
-        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=2)
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
     )
     await asyncio.sleep(0)  # let the follower find the in-flight future and start waiting
 
@@ -87,6 +87,29 @@ async def test_concurrent_identical_misses_coalesce_into_one_provider_call(redis
     assert provider.calls == 1  # the follower never called the provider itself
     assert leader_response == follower_response
     assert gateway._inflight == {}  # cleaned up after completion
+
+
+async def test_different_namespaces_do_not_coalesce(redis_stub) -> None:
+    """Single-flight is scoped per virtual key: different keys must not share
+    an in-flight provider call (they're separate cache namespaces)."""
+    release = asyncio.Event()
+    provider = SlowStubProvider(make_response(), release=release)
+    registry = ProviderRegistry([provider], httpx.AsyncClient())
+
+    leader = asyncio.create_task(
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+    )
+    await asyncio.sleep(0)
+    follower = asyncio.create_task(
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=2)
+    )
+    await asyncio.sleep(0)
+
+    release.set()
+    await asyncio.gather(leader, follower)
+
+    assert provider.calls == 2  # distinct namespaces each triggered their own call
+    assert gateway._inflight == {}
 
 
 async def test_concurrent_misses_both_see_the_same_failure(redis_stub) -> None:
@@ -99,7 +122,7 @@ async def test_concurrent_misses_both_see_the_same_failure(redis_stub) -> None:
     )
     await asyncio.sleep(0)
     follower = asyncio.create_task(
-        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=2)
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
     )
     await asyncio.sleep(0)
 

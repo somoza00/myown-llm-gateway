@@ -15,20 +15,24 @@ async def execute_with_fallback(
 ) -> tuple[BaseProvider, ChatResponse]:
     """Try each provider in order, skipping to the next on any provider-side failure."""
     attempted: list[str] = []
+    last_error: ProviderError | None = None
     for provider in providers:
         attempted.append(provider.config.name)
         try:
             response = await provider.chat_completion(request)
-        except ProviderAuthError:
+        except ProviderAuthError as exc:
             # Auth here means *our* configured credential for this provider is bad,
             # not the caller's virtual key (already verified before routing) — so
             # skipping to the next provider is safe and doesn't burn caller attempts.
             logger.warning("provider_auth_failed", provider=provider.config.name)
+            last_error = exc
             continue
-        except ProviderError:
+        except ProviderError as exc:
+            last_error = exc
             continue
         return provider, response
     raise NoProviderAvailableError(
         f"No provider available for model '{request.model}' (attempted: {', '.join(attempted)})",
         attempted_providers=attempted,
+        last_error=last_error,
     )

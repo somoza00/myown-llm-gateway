@@ -14,7 +14,10 @@ from llm_gateway.core.config import get_settings
 from llm_gateway.core.exceptions import (
     InvalidVirtualKeyError,
     NoProviderAvailableError,
+    ProviderAuthError,
     ProviderError,
+    ProviderRateLimitedError,
+    ProviderTimeoutError,
 )
 from llm_gateway.core.rate_limiter import check_rate_limit
 from llm_gateway.core.security import authenticate_virtual_key
@@ -87,6 +90,22 @@ async def enforce_rate_limit(virtual_key_id: int = Depends(authenticate_request)
     return virtual_key_id
 
 
+def _classify_upstream_error(last_error: ProviderError | None) -> tuple[int, str, str]:
+    """Map the last provider failure from a fallback chain to (status, type, message).
+
+    Lets the client distinguish a provider timeout from an outage from bad
+    upstream credentials, instead of every chain failure surfacing as an
+    opaque 502 `upstream_error`.
+    """
+    if isinstance(last_error, ProviderTimeoutError):
+        return (504, "timeout_error", f"Upstream provider timed out: {last_error}")
+    if isinstance(last_error, ProviderAuthError):
+        return (502, "auth_error", f"Upstream provider auth failed: {last_error}")
+    if isinstance(last_error, ProviderRateLimitedError):
+        return (502, "rate_limit_error", f"Upstream provider rate limited: {last_error}")
+    return (502, "upstream_error", "No provider available")
+
+
 def _enforce_max_tokens(body: ChatRequest) -> ChatRequest:
     """Cap `max_tokens` at the configured ceiling: reject requests that ask for more,
     and fill in the ceiling when the client didn't specify a value at all (an omitted
@@ -123,12 +142,13 @@ async def chat_completions(
     try:
         return await handle_chat_completion(body, get_registry(), virtual_key_id=virtual_key_id)
     except NoProviderAvailableError as exc:
+        status_code, etype, message = _classify_upstream_error(exc.last_error)
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status_code,
             detail={
                 "error": {
-                    "message": "No provider available",
-                    "type": "server_error",
+                    "message": message,
+                    "type": etype,
                     "attempted_providers": exc.attempted_providers,
                 }
             },
@@ -160,7 +180,7 @@ async def _stream_response(
     (and been cached) are deduplicated.
     """
     started = time.monotonic()
-    cache_key = cache_service.build_cache_key(request)
+    cache_key = cache_service.build_cache_key(request, namespace=virtual_key_id)
     cached = await cache_service.get(cache_key)
     if cached is not None:
         for line in synthesize_cached_stream(cached):
@@ -185,9 +205,12 @@ async def _stream_response(
             yield line
         success = True
     except NoProviderAvailableError as exc:
-        yield _sse_error(
-            "No provider available", "server_error", attempted_providers=exc.attempted_providers
-        )
+        _, etype, message = _classify_upstream_error(exc.last_error)
+        yield _sse_error(message, etype, attempted_providers=exc.attempted_providers)
+    except ProviderTimeoutError as exc:
+        yield _sse_error(f"Upstream provider timed out: {exc}", "timeout_error")
+    except ProviderRateLimitedError as exc:
+        yield _sse_error(f"Upstream provider rate limited: {exc}", "rate_limit_error")
     except ProviderError as exc:
         yield _sse_error(f"Upstream provider error: {exc}", "upstream_error")
     finally:

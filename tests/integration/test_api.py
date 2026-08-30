@@ -184,6 +184,22 @@ async def test_chat_completions_rejects_max_tokens_over_limit(
 
 
 @respx.mock
+async def test_chat_completions_maps_upstream_timeout_to_504(
+    client, registry, redis_stub, api_key
+) -> None:
+    """A provider timeout must surface as 504 timeout_error, not an opaque 502."""
+    # Both providers registered by the fixture are candidates for the model;
+    # not mocking one would trip respx's assert-all-mocked on fallback.
+    for url in (OPENAI_CHAT_URL, "https://api.groq.com/openai/v1/chat/completions"):
+        respx.post(url).mock(side_effect=httpx.ConnectTimeout("timed out"))
+    body = {"model": "gpt-4o", "messages": [{"role": "user", "content": "time me out"}]}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 504, resp.text
+    assert resp.json()["error"]["type"] == "timeout_error"
+    assert resp.json()["error"]["attempted_providers"] is not None
+
+
+@respx.mock
 async def test_chat_completions_accepts_max_tokens_at_the_limit(
     client, registry, redis_stub, api_key
 ) -> None:
