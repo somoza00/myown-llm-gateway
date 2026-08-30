@@ -42,6 +42,16 @@ async def test_different_requests_produce_different_keys() -> None:
     assert cache.build_cache_key(first) != cache.build_cache_key(second)
 
 
+async def test_namespace_isolates_key_per_callers() -> None:
+    """Identical prompts from different namespaces (virtual keys) must not collide."""
+    request = ChatRequest(model="m", messages=[{"role": "user", "content": "hi"}])
+    assert cache.build_cache_key(request, namespace=1) != cache.build_cache_key(
+        request, namespace=2
+    )
+    # A namespaced key also differs from the un-namespaced one.
+    assert cache.build_cache_key(request) != cache.build_cache_key(request, namespace=1)
+
+
 async def test_redis_failure_is_tolerated(monkeypatch) -> None:
     class BrokenRedis:
         async def get(self, key: str) -> str | None:

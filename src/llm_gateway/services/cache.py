@@ -19,9 +19,20 @@ settings = get_settings()
 CACHE_PROVIDER_NAME = "cache"
 
 
-def build_cache_key(request: ChatRequest) -> str:
-    """Return a stable SHA-256 cache key derived from the request body."""
-    body = json.dumps(request.model_dump(exclude_none=True), sort_keys=True, separators=(",", ":"))
+def build_cache_key(
+    request: ChatRequest, *, namespace: str | int | None = None
+) -> str:
+    """Return a stable SHA-256 cache key derived from the request body.
+
+    `namespace` isolates the cache per caller identity (e.g. the virtual key id),
+    so an identical prompt from one tenant is not served from another tenant's
+    cached response. The body and namespace are kept as separate JSON array
+    elements so a namespace collision can't smuggle text into the prompt shape.
+    """
+    parts: list[object] = [request.model_dump(exclude_none=True)]
+    if namespace is not None:
+        parts.append(namespace)
+    body = json.dumps(parts, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 

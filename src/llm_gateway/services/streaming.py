@@ -45,6 +45,7 @@ async def stream_chat_completion(
     """Yield (provider, SSE line) pairs, falling back across providers on initiation errors."""
     providers = select_providers(registry, request.model)
     attempted: list[str] = []
+    last_error: ProviderError | None = None
     for provider in providers:
         attempted.append(provider.config.name)
         iterator = provider.stream_chat_completion(request).__aiter__()
@@ -52,10 +53,12 @@ async def stream_chat_completion(
             first_line = await iterator.__anext__()
         except StopAsyncIteration:
             continue
-        except ProviderAuthError:
+        except ProviderAuthError as exc:
             logger.warning("provider_auth_failed", provider=provider.config.name)
+            last_error = exc
             continue
-        except ProviderError:
+        except ProviderError as exc:
+            last_error = exc
             continue
         # Stream started: relay everything. Mid-stream failures propagate to the client.
         yield provider, first_line
@@ -65,6 +68,7 @@ async def stream_chat_completion(
     raise NoProviderAvailableError(
         f"No provider available for model '{request.model}' (attempted: {', '.join(attempted)})",
         attempted_providers=attempted,
+        last_error=last_error,
     )
 
 

@@ -64,7 +64,7 @@ async def handle_chat_completion(
     first triggers a provider call, the rest await its result (see `_inflight`).
     """
     started = time.monotonic()
-    cache_key = cache_service.build_cache_key(request)
+    cache_key = cache_service.build_cache_key(request, namespace=virtual_key_id)
     cached = await cache_service.get(cache_key)
     if cached is not None:
         _record_cache_style_usage(virtual_key_id=virtual_key_id, response=cached, started=started)
