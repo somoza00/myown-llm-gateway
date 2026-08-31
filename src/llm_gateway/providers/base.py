@@ -85,6 +85,7 @@ class BaseProvider(ABC):
                 return ProviderRateLimitedError(
                     f"Provider '{self.config.name}' rate limited (429)",
                     provider=self.config.name,
+                    retry_after=exc.response.headers.get("retry-after"),
                 )
             if status == 401:
                 return ProviderAuthError(

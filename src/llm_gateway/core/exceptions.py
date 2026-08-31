@@ -24,6 +24,14 @@ class ProviderTimeoutError(ProviderError):
 class ProviderRateLimitedError(ProviderError):
     """Raised when an upstream provider responds with a rate-limit error."""
 
+    def __init__(
+        self, message: str, *, provider: str, retry_after: str | None = None
+    ) -> None:
+        super().__init__(message, provider=provider)
+        # The upstream Retry-After (seconds or HTTP-date), so the gateway can
+        # echo back to the caller how long to back off before retrying.
+        self.retry_after = retry_after
+
 
 class ProviderAuthError(ProviderError):
     """Raised when an upstream provider rejects the configured credentials."""

@@ -200,6 +200,20 @@ async def test_chat_completions_maps_upstream_timeout_to_504(
 
 
 @respx.mock
+async def test_chat_completions_propagates_upstream_retry_after(
+    client, registry, redis_stub, api_key
+) -> None:
+    """429 do upstream vira 502 rate_limit_error com o Retry-After ecoado."""
+    for url in (OPENAI_CHAT_URL, "https://api.groq.com/openai/v1/chat/completions"):
+        respx.post(url).mock(return_value=httpx.Response(429, headers={"Retry-After": "37"}))
+    body = {"model": "gpt-4o", "messages": [{"role": "user", "content": "rate me"}]}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 502
+    assert resp.json()["error"]["type"] == "rate_limit_error"
+    assert resp.headers.get("retry-after") == "37"
+
+
+@respx.mock
 async def test_chat_completions_accepts_max_tokens_at_the_limit(
     client, registry, redis_stub, api_key
 ) -> None:

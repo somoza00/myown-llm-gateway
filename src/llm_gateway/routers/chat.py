@@ -90,20 +90,28 @@ async def enforce_rate_limit(virtual_key_id: int = Depends(authenticate_request)
     return virtual_key_id
 
 
-def _classify_upstream_error(last_error: ProviderError | None) -> tuple[int, str, str]:
-    """Map the last provider failure from a fallback chain to (status, type, message).
+def _classify_upstream_error(
+    last_error: ProviderError | None,
+) -> tuple[int, str, str, str | None]:
+    """Map the last provider failure from a fallback chain to (status, type, message, retry_after).
 
     Lets the client distinguish a provider timeout from an outage from bad
     upstream credentials, instead of every chain failure surfacing as an
-    opaque 502 `upstream_error`.
+    opaque 502 `upstream_error`. A rate-limit cause also echoes the upstream
+    `Retry-After` so the caller knows how long to back off.
     """
     if isinstance(last_error, ProviderTimeoutError):
-        return (504, "timeout_error", f"Upstream provider timed out: {last_error}")
+        return (504, "timeout_error", f"Upstream provider timed out: {last_error}", None)
     if isinstance(last_error, ProviderAuthError):
-        return (502, "auth_error", f"Upstream provider auth failed: {last_error}")
+        return (502, "auth_error", f"Upstream provider auth failed: {last_error}", None)
     if isinstance(last_error, ProviderRateLimitedError):
-        return (502, "rate_limit_error", f"Upstream provider rate limited: {last_error}")
-    return (502, "upstream_error", "No provider available")
+        return (
+            502,
+            "rate_limit_error",
+            f"Upstream provider rate limited: {last_error}",
+            last_error.retry_after,
+        )
+    return (502, "upstream_error", "No provider available", None)
 
 
 def _enforce_max_tokens(body: ChatRequest) -> ChatRequest:
@@ -142,7 +150,7 @@ async def chat_completions(
     try:
         return await handle_chat_completion(body, get_registry(), virtual_key_id=virtual_key_id)
     except NoProviderAvailableError as exc:
-        status_code, etype, message = _classify_upstream_error(exc.last_error)
+        status_code, etype, message, retry_after = _classify_upstream_error(exc.last_error)
         raise HTTPException(
             status_code=status_code,
             detail={
@@ -152,6 +160,7 @@ async def chat_completions(
                     "attempted_providers": exc.attempted_providers,
                 }
             },
+            headers={"Retry-After": retry_after} if retry_after else None,
         ) from exc
     except ProviderError as exc:
         raise HTTPException(
@@ -205,12 +214,21 @@ async def _stream_response(
             yield line
         success = True
     except NoProviderAvailableError as exc:
-        _, etype, message = _classify_upstream_error(exc.last_error)
-        yield _sse_error(message, etype, attempted_providers=exc.attempted_providers)
+        _, etype, message, retry_after = _classify_upstream_error(exc.last_error)
+        yield _sse_error(
+            message,
+            etype,
+            attempted_providers=exc.attempted_providers,
+            retry_after=retry_after,
+        )
     except ProviderTimeoutError as exc:
         yield _sse_error(f"Upstream provider timed out: {exc}", "timeout_error")
     except ProviderRateLimitedError as exc:
-        yield _sse_error(f"Upstream provider rate limited: {exc}", "rate_limit_error")
+        yield _sse_error(
+            f"Upstream provider rate limited: {exc}",
+            "rate_limit_error",
+            retry_after=exc.retry_after,
+        )
     except ProviderError as exc:
         yield _sse_error(f"Upstream provider error: {exc}", "upstream_error")
     finally:
@@ -227,10 +245,16 @@ async def _stream_response(
 
 
 def _sse_error(
-    message: str, error_type: str, *, attempted_providers: list[str] | None = None
+    message: str,
+    error_type: str,
+    *,
+    attempted_providers: list[str] | None = None,
+    retry_after: str | None = None,
 ) -> str:
     """Build an OpenAI-style error SSE event."""
     body: dict[str, Any] = {"error": {"message": message, "type": error_type}}
     if attempted_providers is not None:
         body["error"]["attempted_providers"] = attempted_providers
+    if retry_after is not None:
+        body["error"]["retry_after"] = retry_after
     return f"data: {json.dumps(body)}\n\n"
