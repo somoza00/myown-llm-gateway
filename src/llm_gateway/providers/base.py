@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
+import structlog
 
 from llm_gateway.core.exceptions import (
     ProviderAuthError,
@@ -16,6 +17,21 @@ from llm_gateway.core.exceptions import (
 )
 from llm_gateway.models.api import ChatRequest, ChatResponse
 from llm_gateway.models.provider import ProviderConfig
+
+_REQUEST_ID_HEADER = "X-Request-ID"
+
+
+def _with_request_id(headers: dict[str, str]) -> dict[str, str]:
+    """Forward the current request's `request_id` to the upstream provider.
+
+    The gateway binds a `request_id` per incoming request (see core/logging).
+    Echoing it to the provider as `X-Request-ID` lets you correlate gateway
+    logs with the provider's own request logs when investigating an incident.
+    """
+    request_id = structlog.contextvars.get_contextvars().get("request_id")
+    if request_id and _REQUEST_ID_HEADER not in headers:
+        return {**headers, _REQUEST_ID_HEADER: str(request_id)}
+    return headers
 
 
 class BaseProvider(ABC):
@@ -44,7 +60,7 @@ class BaseProvider(ABC):
         """POST to the upstream API, mapping HTTP/transport errors to gateway exceptions."""
         try:
             response = await self.client.post(
-                url, headers=headers, json=payload, timeout=timeout_seconds
+                url, headers=_with_request_id(headers), json=payload, timeout=timeout_seconds
             )
             response.raise_for_status()
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
@@ -62,7 +78,11 @@ class BaseProvider(ABC):
         """POST and yield raw SSE lines, mapping HTTP/transport errors like `_post`."""
         try:
             async with self.client.stream(
-                "POST", url, headers=headers, json=payload, timeout=timeout_seconds
+                "POST",
+                url,
+                headers=_with_request_id(headers),
+                json=payload,
+                timeout=timeout_seconds,
             ) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
