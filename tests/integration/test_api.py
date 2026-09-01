@@ -214,6 +214,25 @@ async def test_chat_completions_propagates_upstream_retry_after(
 
 
 @respx.mock
+async def test_upstream_request_forwards_request_id(
+    client, registry, redis_stub, api_key
+) -> None:
+    """O request_id do gateway chega ao upstream como X-Request-ID."""
+    route = respx.post(OPENAI_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=openai_response())
+    )
+    body = {"model": "gpt-4o", "messages": [{"role": "user", "content": "correlation"}]}
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={**AUTH, "X-Request-ID": "caller-abc"},
+        json=body,
+    )
+    assert resp.status_code == 200, resp.text
+    assert route.call_count == 1
+    assert route.calls[0].request.headers.get("x-request-id") == "caller-abc"
+
+
+@respx.mock
 async def test_chat_completions_accepts_max_tokens_at_the_limit(
     client, registry, redis_stub, api_key
 ) -> None:
