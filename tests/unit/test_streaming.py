@@ -199,6 +199,13 @@ async def test_openai_stream_drops_blank_separator_lines_and_requests_usage() ->
     assert captured["body"]["stream_options"] == {"include_usage": True}
 
 
+def test_capture_usage_tolerates_non_numeric_tokens() -> None:
+    """Um fornecedor mandando `usage` como texto não deve quebrar o parse."""
+    current = Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
+    payload = {"usage": {"prompt_tokens": "abc", "completion_tokens": "x", "total_tokens": None}}
+    assert capture_usage(f"data: {json.dumps(payload)}\n\n", current) == current
+
+
 async def test_mistral_stream_drops_blank_separator_lines_and_requests_usage() -> None:
     captured: dict = {}
 

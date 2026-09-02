@@ -29,6 +29,16 @@ from llm_gateway.services.usage import persist_usage
 
 logger = get_logger("streaming")
 
+
+def _to_int(value: object, default: int) -> int:
+    """Coerce a token count from a provider chunk, falling back to `default`
+    if the upstream sends a non-numeric value (e.g. a string)."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        return int(value)
+    return default
+
 _background_tasks: set[asyncio.Task[Any]] = set()
 
 
@@ -87,12 +97,12 @@ def capture_usage(line: str, current: Usage) -> Usage:
     usage = chunk.get("usage")
     if not isinstance(usage, dict):
         return current
-    prompt = int(usage.get("prompt_tokens", current.prompt_tokens))
-    completion = int(usage.get("completion_tokens", current.completion_tokens))
+    prompt = _to_int(usage.get("prompt_tokens"), current.prompt_tokens)
+    completion = _to_int(usage.get("completion_tokens"), current.completion_tokens)
     return Usage(
         prompt_tokens=prompt,
         completion_tokens=completion,
-        total_tokens=int(usage.get("total_tokens", prompt + completion)),
+        total_tokens=_to_int(usage.get("total_tokens"), prompt + completion),
     )
 
 
@@ -174,11 +184,11 @@ class ChunkAccumulator:
         usage = chunk.get("usage")
         if isinstance(usage, dict):
             self.usage = Usage(
-                prompt_tokens=int(usage.get("prompt_tokens", self.usage.prompt_tokens)),
-                completion_tokens=int(
-                    usage.get("completion_tokens", self.usage.completion_tokens)
+                prompt_tokens=_to_int(usage.get("prompt_tokens"), self.usage.prompt_tokens),
+                completion_tokens=_to_int(
+                    usage.get("completion_tokens"), self.usage.completion_tokens
                 ),
-                total_tokens=int(usage.get("total_tokens", self.usage.total_tokens)),
+                total_tokens=_to_int(usage.get("total_tokens"), self.usage.total_tokens),
             )
 
     def to_response(self) -> ChatResponse:
