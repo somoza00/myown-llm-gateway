@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
@@ -257,4 +258,7 @@ def _sse_error(
         body["error"]["attempted_providers"] = attempted_providers
     if retry_after is not None:
         body["error"]["retry_after"] = retry_after
+    request_id = structlog.contextvars.get_contextvars().get("request_id")
+    if request_id:
+        body["error"]["request_id"] = str(request_id)
     return f"data: {json.dumps(body)}\n\n"

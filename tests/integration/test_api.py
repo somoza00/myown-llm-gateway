@@ -248,6 +248,21 @@ async def test_error_response_includes_request_id(
 
 
 @respx.mock
+async def test_streaming_error_includes_request_id(
+    client, registry, redis_stub, api_key
+) -> None:
+    """O evento de erro SSE herda o request_id (consistente com o HTTP)."""
+    body = {**CHAT_BODY, "stream": True, "messages": [{"role": "user", "content": "sse err"}]}
+    for url in (OPENAI_CHAT_URL, "https://api.groq.com/openai/v1/chat/completions"):
+        respx.post(url).mock(side_effect=httpx.ConnectTimeout("boom"))
+    resp = await client.post(
+        "/v1/chat/completions", headers={**AUTH, "X-Request-ID": "sse-rid"}, json=body
+    )
+    assert resp.status_code == 200
+    assert '"request_id": "sse-rid"' in resp.text
+
+
+@respx.mock
 async def test_chat_completions_accepts_max_tokens_at_the_limit(
     client, registry, redis_stub, api_key
 ) -> None:
