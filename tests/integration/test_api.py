@@ -49,16 +49,19 @@ async def test_chat_completions_full_flow(client, registry, redis_stub, api_key)
     # No key -> 401, OpenAI-style flat error envelope (not FastAPI's default {"detail": ...})
     resp = await client.post("/v1/chat/completions", json=CHAT_BODY)
     assert resp.status_code == 401
-    assert resp.json() == {
-        "error": {"message": "Missing or invalid API key", "type": "invalid_request_error"}
-    }
+    error = resp.json()["error"]
+    assert error["request_id"]  # presente no envelope para debug
+    error.pop("request_id")
+    assert error == {"message": "Missing or invalid API key", "type": "invalid_request_error"}
 
     # Unknown key -> 401
     resp = await client.post(
         "/v1/chat/completions", headers={"Authorization": "Bearer wrong-key"}, json=CHAT_BODY
     )
     assert resp.status_code == 401
-    assert resp.json() == {"error": {"message": "Invalid API key", "type": "invalid_request_error"}}
+    error = resp.json()["error"]
+    error.pop("request_id", None)
+    assert error == {"message": "Invalid API key", "type": "invalid_request_error"}
 
     # Valid key -> 200 with the mocked provider response
     resp = await client.post("/v1/chat/completions", headers=AUTH, json=CHAT_BODY)
@@ -111,9 +114,9 @@ async def test_chat_completions_rate_limited(
         body = {"model": "gpt-4o", "messages": [{"role": "user", "content": "msg-3"}]}
         resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
         assert resp.status_code == 429, resp.text
-        assert resp.json() == {
-            "error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}
-        }
+        error = resp.json()["error"]
+        error.pop("request_id", None)
+        assert error == {"message": "Rate limit exceeded", "type": "rate_limit_error"}
         assert resp.headers["retry-after"] == "60"
 
     await asyncio.sleep(0.05)  # let the fire-and-forget usage-persist tasks finish
@@ -233,6 +236,18 @@ async def test_upstream_request_forwards_request_id(
 
 
 @respx.mock
+async def test_error_response_includes_request_id(
+    client, registry, redis_stub, api_key
+) -> None:
+    """O corpo de erro OpenAI-style inclui o request_id para debug."""
+    resp = await client.post(
+        "/v1/chat/completions", headers={"X-Request-ID": "rid-99"}, json=CHAT_BODY
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["request_id"] == "rid-99"
+
+
+@respx.mock
 async def test_chat_completions_accepts_max_tokens_at_the_limit(
     client, registry, redis_stub, api_key
 ) -> None:
@@ -345,9 +360,9 @@ async def test_models_lists_active_providers(client, registry, redis_stub, api_k
     # The models endpoint is authenticated: 401 without a key
     resp = await client.get("/v1/models")
     assert resp.status_code == 401
-    assert resp.json() == {
-        "error": {"message": "Missing or invalid API key", "type": "invalid_request_error"}
-    }
+    error = resp.json()["error"]
+    error.pop("request_id", None)
+    assert error == {"message": "Missing or invalid API key", "type": "invalid_request_error"}
 
     resp = await client.get("/v1/models", headers=AUTH)
     assert resp.status_code == 200, resp.text
