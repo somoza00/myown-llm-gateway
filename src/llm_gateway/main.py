@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import httpx
+import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -90,6 +91,9 @@ async def _openai_style_exception_handler(_request: Request, exc: Exception) -> 
     body = detail if isinstance(detail, dict) and "error" in detail else {
         "error": {"message": str(detail), "type": "invalid_request_error"}
     }
+    request_id = structlog.contextvars.get_contextvars().get("request_id")
+    if request_id:
+        body.setdefault("error", {})["request_id"] = str(request_id)
     return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
 
 
