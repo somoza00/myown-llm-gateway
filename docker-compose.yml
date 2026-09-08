@@ -10,8 +10,12 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # O container sempre escuta em 8000 (fixo no Dockerfile/CMD); usar
+    # ${GATEWAY_PORT} aqui quebraria o healthcheck: GATEWAY_PORT é a porta
+    # mapeada no host, não a interna. Se o usuário a customizasse, o gateway
+    # ficaria "unhealthy" para sempre.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${GATEWAY_PORT:-8000}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
