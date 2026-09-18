@@ -7,7 +7,12 @@ import structlog
 from starlette.requests import Request
 from starlette.responses import Response
 
-from llm_gateway.main import REQUEST_ID_HEADER, _request_id_middleware
+from llm_gateway.main import (
+    REQUEST_ID_HEADER,
+    SECURITY_HEADERS,
+    _request_id_middleware,
+    _security_headers_middleware,
+)
 
 
 def _make_request(headers: dict[str, str] | None = None) -> Request:
@@ -60,3 +65,26 @@ async def test_context_is_cleared_even_if_call_next_raises() -> None:
         await _request_id_middleware(_make_request(), call_next)
 
     assert structlog.contextvars.get_contextvars() == {}
+
+
+async def test_security_headers_are_set_on_response() -> None:
+    async def call_next(_request: Request) -> Response:
+        return Response()
+
+    response = await _security_headers_middleware(_make_request(), call_next)
+
+    for header, value in SECURITY_HEADERS.items():
+        assert response.headers[header] == value
+
+
+async def test_security_headers_do_not_override_existing_values() -> None:
+    async def call_next(_request: Request) -> Response:
+        upstream = Response()
+        upstream.headers["X-Content-Type-Options"] = "sniff"
+        return upstream
+
+    response = await _security_headers_middleware(_make_request(), call_next)
+
+    # setdefault: valor do upstream prevalece
+    assert response.headers["X-Content-Type-Options"] == "sniff"
+    assert response.headers["X-Frame-Options"] == SECURITY_HEADERS["X-Frame-Options"]

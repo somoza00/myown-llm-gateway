@@ -84,6 +84,26 @@ async def _request_id_middleware(
     return response
 
 
+# Headers de hardening em toda resposta. API não serve HTML, mas os headers
+# são padrão de segurança (defaults seguros em navegadores/proxies), e o FastAPI
+# expõe /docs em dev — janela pequena onde sniffing/iframe importam.
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+async def _security_headers_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Set standard security headers on every response (does not override an existing value)."""
+    response = await call_next(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
+
+
 async def _openai_style_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
     """Normalize HTTPException responses to the OpenAI-compatible {"error": {...}} envelope."""
     assert isinstance(exc, HTTPException)
@@ -101,6 +121,7 @@ def create_app() -> FastAPI:
     """Build the FastAPI application with all routers and the lifespan handler."""
     app = FastAPI(title="LLM Gateway", version="0.1.0", lifespan=lifespan)
     app.middleware("http")(_request_id_middleware)
+    app.middleware("http")(_security_headers_middleware)
     app.add_exception_handler(HTTPException, _openai_style_exception_handler)
     app.include_router(chat.router)
     app.include_router(health.router)
