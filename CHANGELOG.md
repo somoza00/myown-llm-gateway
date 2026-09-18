@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `create-key` now defaults to a 90-day expiry instead of never expiring;
   pass `--no-expiry` for the previous (permanent-key) behavior.
 
+### Operations
+- Container HEALTHCHECK switched from `/health` (liveness only) to
+  `/health/ready` (readiness: Redis PING + database query; returns 503 when
+  either dependency is unreachable), so the gateway reports `unhealthy` only
+  when it is actually degraded and not just the process being up.
+- Added a `Makefile` mirroring CI (`config`/`install`/`lint`/`typecheck`/
+  `test`/`audit`/`up`/`down`), an `.editorconfig`, and a `.env.*` gitignore
+  rule (with `!.env.example`) to keep secrets out of the working tree.
+- Added Dependabot (weekly) for Python `pip`, Docker, and GitHub Actions.
+
 ## [0.1.0] - 2026-08-13
 
 ### Added
