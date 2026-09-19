@@ -387,3 +387,17 @@ async def test_models_lists_active_providers(client, registry, redis_stub, api_k
     by_id = {m["id"]: m for m in data}
     assert by_id["gpt-4o"]["owned_by"] == "openai"
     assert by_id["llama-3.1-8b-instant"]["owned_by"] == "groq"
+
+
+async def test_models_get_single(client, registry, redis_stub, api_key) -> None:
+    resp = await client.get("/v1/models/gpt-4o", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == "gpt-4o"
+    assert body["owned_by"] == "openai"
+
+
+async def test_models_get_single_404_when_unknown(client, registry, redis_stub, api_key) -> None:
+    resp = await client.get("/v1/models/no-such-model", headers=AUTH)
+    assert resp.status_code == 404
+    assert resp.json()["error"]["message"] == "model 'no-such-model' not found"
