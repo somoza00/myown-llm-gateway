@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     # history; it's a coarse guard (message count, not token count), not a precise one.
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, gt=0.0, le=1.0)
     frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
