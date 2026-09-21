@@ -28,3 +28,14 @@ def test_accepts_a_reasonably_long_message() -> None:
 def test_rejects_an_excessively_long_message() -> None:
     with pytest.raises(ValidationError):
         ChatRequest(model="m", messages=[{"role": "user", "content": "x" * 50_001}])
+
+
+def test_accepts_penalties_in_range() -> None:
+    ChatRequest(model="m", messages=_messages(1), frequency_penalty=0.5, presence_penalty=1.0)
+
+
+def test_rejects_penalties_out_of_range() -> None:
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), frequency_penalty=3.0)
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), presence_penalty=-3.0)
