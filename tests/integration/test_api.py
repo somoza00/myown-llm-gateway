@@ -401,3 +401,11 @@ async def test_models_get_single_404_when_unknown(client, registry, redis_stub, 
     resp = await client.get("/v1/models/no-such-model", headers=AUTH)
     assert resp.status_code == 404
     assert resp.json()["error"]["message"] == "model 'no-such-model' not found"
+
+
+async def test_rate_limit_headers_are_exposed(client, registry, redis_stub, api_key) -> None:
+    """Respostas autenticadas carregam X-RateLimit-Limit/Remaining."""
+    resp = await client.get("/v1/models", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers.get("x-ratelimit-limit")
+    assert resp.headers.get("x-ratelimit-remaining") is not None

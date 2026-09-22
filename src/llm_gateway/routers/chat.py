@@ -20,7 +20,7 @@ from llm_gateway.core.exceptions import (
     ProviderRateLimitedError,
     ProviderTimeoutError,
 )
-from llm_gateway.core.rate_limiter import check_rate_limit
+from llm_gateway.core.rate_limiter import check_rate_limit_status
 from llm_gateway.core.security import authenticate_virtual_key
 from llm_gateway.models.api import ChatRequest, ChatResponse, Usage
 from llm_gateway.providers.base import BaseProvider
@@ -79,9 +79,19 @@ async def authenticate_request(request: Request) -> int:
     return int(record.id)
 
 
-async def enforce_rate_limit(virtual_key_id: int = Depends(authenticate_request)) -> int:
-    """Reject the request with 429 once the virtual key exceeds its request quota."""
-    if not await check_rate_limit(virtual_key_id):
+async def enforce_rate_limit(
+    response: Response,
+    virtual_key_id: int = Depends(authenticate_request),
+) -> int:
+    """Reject with 429 once the virtual key exceeds its quota; expose quota via headers.
+
+    Sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every authenticated
+    response, so clients can back off without waiting for a 429.
+    """
+    rl_status = await check_rate_limit_status(virtual_key_id)
+    response.headers["X-RateLimit-Limit"] = str(rl_status.limit)
+    response.headers["X-RateLimit-Remaining"] = str(rl_status.remaining)
+    if not rl_status.allowed:
         settings = get_settings()
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

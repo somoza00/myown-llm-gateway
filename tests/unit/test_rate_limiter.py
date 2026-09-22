@@ -161,3 +161,19 @@ async def test_redis_failure_logs_warning_with_key_and_error(monkeypatch) -> Non
     assert entry["event"] == "rate_limit_check_failed"
     assert entry["virtual_key_id"] == 42
     assert entry["error"] == "redis is down"
+
+
+async def test_status_reports_limit_and_remaining(monkeypatch) -> None:
+    """`check_rate_limit_status` expõe limite/restante/janela para headers."""
+    monkeypatch.setattr(rate_limiter, "redis_client", FakeRedis())
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 5)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    st1 = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+    assert st1.allowed is True
+    assert st1.limit == 5
+    assert st1.remaining == 4  # 1 request usado nesta janela
+    assert st1.window_seconds == 60
+
+    st2 = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+    assert st2.remaining == 3
