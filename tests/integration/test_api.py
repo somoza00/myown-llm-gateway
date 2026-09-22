@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import httpx
 import respx
@@ -78,15 +79,23 @@ async def test_chat_completions_full_flow(client, registry, redis_stub, api_key)
 
     # Usage rows persisted: one for the provider call, one for the cache hit.
     # Filtered by virtual_key_id since `db` is session-scoped and shared across tests.
-    await asyncio.sleep(0.05)  # let the fire-and-forget tasks finish
     from llm_gateway.storage.database import async_session_factory
     from llm_gateway.storage.orm import UsageLog
 
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(UsageLog).where(UsageLog.virtual_key_id == api_key)
-        )
-        logs = result.scalars().all()
+    # As escritas de uso são fire-and-forget (assíncronas); um sleep fixo de 0.05s
+    # era flaky em CI lento (Python 3.11 chegava com só 1 das 2 linhas). Poll até as
+    # 2 aparecerem, com timeout — determiniístico sem dormir à toa.
+    deadline = time.monotonic() + 5.0
+    logs: list[UsageLog] = []
+    while time.monotonic() < deadline:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(UsageLog).where(UsageLog.virtual_key_id == api_key)
+            )
+            logs = list(result.scalars().all())
+        if len(logs) >= 2:
+            break
+        await asyncio.sleep(0.05)
     assert len(logs) == 2
     assert {log.provider for log in logs} == {"openai", "cache"}
     assert all(log.virtual_key_id == api_key for log in logs)
@@ -401,3 +410,11 @@ async def test_models_get_single_404_when_unknown(client, registry, redis_stub, 
     resp = await client.get("/v1/models/no-such-model", headers=AUTH)
     assert resp.status_code == 404
     assert resp.json()["error"]["message"] == "model 'no-such-model' not found"
+
+
+async def test_rate_limit_headers_are_exposed(client, registry, redis_stub, api_key) -> None:
+    """Respostas autenticadas carregam X-RateLimit-Limit/Remaining."""
+    resp = await client.get("/v1/models", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers.get("x-ratelimit-limit")
+    assert resp.headers.get("x-ratelimit-remaining") is not None
