@@ -39,3 +39,14 @@ def test_rejects_penalties_out_of_range() -> None:
         ChatRequest(model="m", messages=_messages(1), frequency_penalty=3.0)
     with pytest.raises(ValidationError):
         ChatRequest(model="m", messages=_messages(1), presence_penalty=-3.0)
+
+
+def test_accepts_top_p_in_range() -> None:
+    ChatRequest(model="m", messages=_messages(1), top_p=0.9)
+
+
+def test_rejects_top_p_out_of_range() -> None:
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), top_p=1.5)
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), top_p=0.0)
