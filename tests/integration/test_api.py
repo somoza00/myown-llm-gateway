@@ -127,6 +127,10 @@ async def test_chat_completions_rate_limited(
         error.pop("request_id", None)
         assert error == {"message": "Rate limit exceeded", "type": "rate_limit_error"}
         assert resp.headers["retry-after"] == "60"
+        # O cliente que bateu o limite precisa ver a cota no próprio 429 (sem
+        # gastar outra requisição numa consulta de volta).
+        assert resp.headers.get("x-ratelimit-limit") == "2"
+        assert resp.headers.get("x-ratelimit-remaining") is not None
 
     await asyncio.sleep(0.05)  # let the fire-and-forget usage-persist tasks finish
 
@@ -223,6 +227,21 @@ async def test_chat_completions_propagates_upstream_retry_after(
     assert resp.status_code == 502
     assert resp.json()["error"]["type"] == "rate_limit_error"
     assert resp.headers.get("retry-after") == "37"
+
+
+@respx.mock
+async def test_chat_completions_unknown_model_returns_404(
+    client, registry, redis_stub, api_key
+) -> None:
+    """Modelo desconhecido => 404 model_not_found (não 502 de upstream)."""
+    # "gpt-5" não pertence a nenhum provedor do registry: a chamada nem chega à
+    # rede (nenhum provider é candidato), então nada precisa ser mockado.
+    body = {"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 404, resp.text
+    error = resp.json()["error"]
+    error.pop("request_id", None)
+    assert error == {"message": "Model 'gpt-5' does not exist", "type": "model_not_found"}
 
 
 @respx.mock
