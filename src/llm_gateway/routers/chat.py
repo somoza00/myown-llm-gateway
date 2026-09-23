@@ -96,7 +96,11 @@ async def enforce_rate_limit(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}},
-            headers={"Retry-After": str(settings.RATE_LIMIT_WINDOW_SECONDS)},
+            headers={
+                "Retry-After": str(settings.RATE_LIMIT_WINDOW_SECONDS),
+                "X-RateLimit-Limit": str(rl_status.limit),
+                "X-RateLimit-Remaining": str(rl_status.remaining),
+            },
         )
     return virtual_key_id
 
@@ -161,6 +165,20 @@ async def chat_completions(
     try:
         return await handle_chat_completion(body, get_registry(), virtual_key_id=virtual_key_id)
     except NoProviderAvailableError as exc:
+        if not exc.attempted_providers:
+            # Nenhum provedor sequer foi candidato ao modelo => é erro do
+            # cliente (modelo desconhecido), não falha de upstream. Devolve 404
+            # acionável (como a OpenAI e como GET /v1/models/{id} já fazem) em
+            # vez de um 502 que dispara alerta de 5xx à toa.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": {
+                        "message": f"Model '{body.model}' does not exist",
+                        "type": "model_not_found",
+                    }
+                },
+            ) from exc
         status_code, etype, message, retry_after = _classify_upstream_error(exc.last_error)
         raise HTTPException(
             status_code=status_code,
@@ -225,6 +243,9 @@ async def _stream_response(
             yield line
         success = True
     except NoProviderAvailableError as exc:
+        if not exc.attempted_providers:
+            yield _sse_error(f"Model '{request.model}' does not exist", "model_not_found")
+            return
         _, etype, message, retry_after = _classify_upstream_error(exc.last_error)
         yield _sse_error(
             message,
