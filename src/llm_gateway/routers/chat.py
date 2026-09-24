@@ -126,6 +126,12 @@ def _classify_upstream_error(
             f"Upstream provider rate limited: {last_error}",
             last_error.retry_after,
         )
+    if last_error is not None:
+        # Provedores FORAM tentados e falharam com um erro genérico (ex. HTTP
+        # 500/502/503 ou resposta malformada). Diga qual, em vez do enganoso
+        # "No provider available" — que só é verdade quando nada foi tentado
+        # (caso já tratado antes, na rota, como 404 model_not_found).
+        return (502, "upstream_error", f"Upstream provider error: {last_error}", None)
     return (502, "upstream_error", "No provider available", None)
 
 
