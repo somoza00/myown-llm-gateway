@@ -5,11 +5,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import cast
 
 import httpx
 import structlog
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from llm_gateway.core.config import get_settings
@@ -117,12 +119,32 @@ async def _openai_style_exception_handler(_request: Request, exc: Exception) -> 
     return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
 
 
+async def _validation_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Normalize FastAPI body-validation failures to the OpenAI-style 400 envelope.
+
+    Out-of-range `temperature`/`top_p`/penalties, malformed `messages`, and other
+    Pydantic constraint violations would otherwise surface as FastAPI's default
+    422 `{"detail": [...]}` — a shape and status that OpenAI clients neither
+    expect nor understand, and inconsistent with every other error response on
+    this API (which speaks `{"error": {"type", "message", "request_id"}}`).
+    """
+    verr = cast("RequestValidationError", exc)
+    first = verr.errors()[0] if verr.errors() else {}
+    loc = ".".join(str(part) for part in first.get("loc", []) if part != "body")
+    msg = str(first.get("msg", "Invalid request"))
+    error_body: dict[str, str] = {"type": "invalid_request_error", "message": msg}
+    if loc:
+        error_body["param"] = loc
+    return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": error_body})
+
+
 def create_app() -> FastAPI:
     """Build the FastAPI application with all routers and the lifespan handler."""
     app = FastAPI(title="LLM Gateway", version="0.1.0", lifespan=lifespan)
     app.middleware("http")(_request_id_middleware)
     app.middleware("http")(_security_headers_middleware)
     app.add_exception_handler(HTTPException, _openai_style_exception_handler)
+    app.add_exception_handler(RequestValidationError, _validation_exception_handler)
     app.include_router(chat.router)
     app.include_router(health.router)
     app.include_router(models.router)

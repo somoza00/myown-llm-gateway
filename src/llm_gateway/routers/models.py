@@ -37,5 +37,13 @@ async def get_model(
             owner = provider.config.name
             break
     if owner is None:
-        raise HTTPException(status_code=404, detail=f"model '{model_id}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "message": f"model '{model_id}' not found",
+                    "type": "model_not_found",
+                }
+            },
+        )
     return {"id": model_id, "object": "model", "created": 0, "owned_by": owner}
