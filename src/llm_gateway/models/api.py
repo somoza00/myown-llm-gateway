@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Role = Literal["system", "user", "assistant"]
 FinishReason = Literal["stop", "length", "content_filter"]
@@ -30,6 +30,18 @@ class ChatRequest(BaseModel):
     presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
     stream: bool = False
+
+    @model_validator(mode="after")
+    def _require_user_message(self: ChatRequest) -> ChatRequest:
+        """Reject a conversation with no `user` turn.
+
+        A request of only `system`/`assistant` messages has nothing to answer;
+        upstream providers reject it too. Fail fast with a clear, OpenAI-style
+        error instead of forwarding a nonsensical payload.
+        """
+        if not any(m.role == "user" for m in self.messages):
+            raise ValueError("messages must include at least one message with role 'user'")
+        return self
 
 
 class ChatResponseChoice(BaseModel):

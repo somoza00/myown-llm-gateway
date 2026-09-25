@@ -437,3 +437,38 @@ async def test_rate_limit_headers_are_exposed(client, registry, redis_stub, api_
     assert resp.status_code == 200, resp.text
     assert resp.headers.get("x-ratelimit-limit")
     assert resp.headers.get("x-ratelimit-remaining") is not None
+
+
+async def test_chat_validation_errors_are_openai_style_400(
+    client, registry, redis_stub, api_key
+) -> None:
+    """Constraint violations (temperature fora de faixa) viram 400 OpenAI-style, não 422."""
+    body = {**CHAT_BODY, "temperature": 99.0}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["message"]
+
+
+async def test_chat_rejects_messages_without_user_role(
+    client, registry, redis_stub, api_key
+) -> None:
+    """Conversa sem turno 'user' é rejeitada antes de chegar ao provedor."""
+    body = {"model": "gpt-4o", "messages": [{"role": "system", "content": "be nice"}]}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert "user" in error["message"]
+
+
+async def test_models_unknown_404_uses_model_not_found_type(
+    client, registry, redis_stub, api_key
+) -> None:
+    """O 404 de modelo desconhecido carrega type 'model_not_found', não 'invalid_request_error'."""
+    resp = await client.get("/v1/models/no-such-model", headers=AUTH)
+    assert resp.status_code == 404
+    error = resp.json()["error"]
+    assert error["message"] == "model 'no-such-model' not found"
+    assert error["type"] == "model_not_found"

@@ -50,3 +50,18 @@ def test_rejects_top_p_out_of_range() -> None:
         ChatRequest(model="m", messages=_messages(1), top_p=1.5)
     with pytest.raises(ValidationError):
         ChatRequest(model="m", messages=_messages(1), top_p=0.0)
+
+
+def test_rejects_conversation_without_a_user_message() -> None:
+    with pytest.raises(ValidationError, match="role 'user'"):
+        ChatRequest(model="m", messages=[{"role": "system", "content": "be nice"}])
+
+
+def test_accepts_conversation_with_user_among_others() -> None:
+    ChatRequest(
+        model="m",
+        messages=[
+            {"role": "system", "content": "be nice"},
+            {"role": "user", "content": "hi"},
+        ],
+    )
