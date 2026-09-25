@@ -90,7 +90,9 @@ async def test_chat_completions_full_flow(client, registry, redis_stub, api_key)
     while time.monotonic() < deadline:
         async with async_session_factory() as session:
             result = await session.execute(
-                select(UsageLog).where(UsageLog.virtual_key_id == api_key)
+                select(UsageLog)
+                .where(UsageLog.virtual_key_id == api_key)
+                .where(UsageLog.status == "ok")  # ignora logs de falha (ex: rate-limit)
             )
             logs = list(result.scalars().all())
         if len(logs) >= 2:
@@ -245,6 +247,40 @@ async def test_chat_completions_unknown_model_returns_404(
 
 
 @respx.mock
+async def test_unknown_model_is_logged_as_error_and_logs_endpoint(
+    client, registry, redis_stub, api_key
+) -> None:
+    """Um request falho (modelo desconhecido) vira log status=error, visto em /api/logs.
+
+    /api/logs exige autenticação; retorna a linha de falha com error_type.
+    """
+    # /api/logs sem chave -> 401
+    assert (await client.get("/api/logs")).status_code == 401
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=AUTH,
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 404
+
+    # O registro de falha é fire-and-forget; poll até aparecer.
+    deadline = time.monotonic() + 5.0
+    entry: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        logs_resp = await client.get("/api/logs?limit=20", headers=AUTH)
+        assert logs_resp.status_code == 200, logs_resp.text
+        logs: list[dict[str, object]] = logs_resp.json()["logs"]
+        entry = next((log_ for log_ in logs if log_.get("error_type") == "model_not_found"), None)
+        if entry is not None:
+            break
+        await asyncio.sleep(0.05)
+    assert entry is not None
+    assert entry["status"] == "error"
+    assert entry["model"] == "gpt-5"
+    assert entry["total_tokens"] == 0
+
+
+@respx.mock
 async def test_upstream_request_forwards_request_id(
     client, registry, redis_stub, api_key
 ) -> None:
@@ -361,10 +397,12 @@ async def test_streaming_second_identical_request_served_from_cache(
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(UsageLog).where(UsageLog.virtual_key_id == api_key)
+            select(UsageLog)
+            .where(UsageLog.virtual_key_id == api_key)
+            .where(UsageLog.status == "ok")  # só a cadeia de uso bem-sucedida
         )
         logs = result.scalars().all()
-    assert {log.provider for log in logs} == {"openai", "cache"}
+    assert {log.provider for log in logs}.issuperset({"openai", "cache"})
     cache_log = next(log for log in logs if log.provider == "cache")
     assert cache_log.model == "gpt-4o"
     assert float(cache_log.estimated_cost) == 0.0

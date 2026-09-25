@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from llm_gateway.core.config import get_settings
 from llm_gateway.core.logging import (
@@ -21,7 +23,7 @@ from llm_gateway.core.logging import (
     configure_logging,
     get_logger,
 )
-from llm_gateway.routers import chat, health, models
+from llm_gateway.routers import chat, health, logs, models
 from llm_gateway.storage.database import dispose_engine
 from llm_gateway.storage.redis import close_redis
 from llm_gateway.storage.redis import healthcheck as redis_healthcheck
@@ -148,6 +150,13 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(health.router)
     app.include_router(models.router)
+    app.include_router(logs.router)  # GET /api/logs para a UI /ui
+
+    # UI /ui: assa o build do frontend Vite (copiado para /app/ui na imagem).
+    # Sem build presente (dev/test local), silenciosamente não monta.
+    ui_dir = os.environ.get("UI_ASSETS_DIR", "/app/ui")
+    if os.path.isdir(ui_dir):
+        app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
     return app
 
 

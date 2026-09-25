@@ -21,6 +21,8 @@ class UsageLogData(TypedDict):
     output_tokens: int
     latency_ms: int
     estimated_cost: Decimal
+    status: str
+    error_type: str | None
 
 
 async def get_key_by_hash(key_hash: str) -> ApiKey | None:
@@ -35,6 +37,37 @@ async def create_usage_log(data: UsageLogData) -> None:
     async with async_session_factory() as session:
         session.add(UsageLog(**data))
         await session.commit()
+
+
+async def create_failed_usage_log(
+    *, virtual_key_id: int, provider: str = "", model: str = "", latency_ms: int = 0,
+    error_type: str,
+) -> None:
+    """Persist a failed request (status='error') for the logs UI."""
+    async with async_session_factory() as session:
+        session.add(
+            UsageLog(
+                virtual_key_id=virtual_key_id,
+                provider=provider,
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=latency_ms,
+                estimated_cost=Decimal("0"),
+                status="error",
+                error_type=error_type,
+            )
+        )
+        await session.commit()
+
+
+async def list_usage_logs(limit: int) -> list[UsageLog]:
+    """Return the most recent `limit` usage logs, newest first."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(UsageLog).order_by(UsageLog.id.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
 
 
 async def list_keys() -> list[ApiKey]:

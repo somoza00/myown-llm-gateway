@@ -1,13 +1,8 @@
 .git
-.gitignore
 .venv
-__pycache__
+frontend/node_modules
+frontend/dist
 *.pyc
+__pycache__
 .env
-.env.*
-tests
-.pytest_cache
-.mypy_cache
-.ruff_cache
-dist
-build
+*.log
