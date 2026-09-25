@@ -1,3 +1,12 @@
+# UI / Logs dashboard — build dentro da própria imagem.
+FROM node:22-alpine AS ui-builder
+WORKDIR /ui
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ---- runtime ----
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -11,6 +20,7 @@ COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY docker-entrypoint.sh ./
+COPY --from=ui-builder /ui/dist ./ui
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \

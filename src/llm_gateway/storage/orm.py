@@ -25,18 +25,25 @@ class ApiKey(Base):
 
 
 class UsageLog(Base):
-    """A single upstream request record for usage accounting."""
+    """A single upstream request record for usage accounting.
+
+    `status` distingue uma requisição completada (`ok`) de uma que falhou antes
+    de gerar uso (`error`), permitindo à UI de logs mostrar verde/vermelho.
+    `error_type` guarda o tipo curto (ex.: `model_not_found`, `rate_limited`).
+    """
 
     __tablename__ = "usage_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     virtual_key_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(64))
-    model: Mapped[str] = mapped_column(String(128))
+    provider: Mapped[str] = mapped_column(String(64), default="")
+    model: Mapped[str] = mapped_column(String(128), default="")
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    status: Mapped[str] = mapped_column(String(16), server_default="ok", default="ok")
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

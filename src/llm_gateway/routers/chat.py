@@ -35,6 +35,7 @@ from llm_gateway.services.streaming import (
     stream_chat_completion,
     synthesize_cached_stream,
 )
+from llm_gateway.services.usage import record_failed_request
 from llm_gateway.storage.repositories import get_key_by_hash
 
 router = APIRouter(tags=["chat"])
@@ -93,6 +94,7 @@ async def enforce_rate_limit(
     response.headers["X-RateLimit-Remaining"] = str(rl_status.remaining)
     if not rl_status.allowed:
         settings = get_settings()
+        record_failed_request(virtual_key_id=virtual_key_id, error_type="rate_limited")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}},
@@ -168,6 +170,7 @@ async def chat_completions(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+    started = time.monotonic()
     try:
         return await handle_chat_completion(body, get_registry(), virtual_key_id=virtual_key_id)
     except NoProviderAvailableError as exc:
@@ -176,6 +179,12 @@ async def chat_completions(
             # cliente (modelo desconhecido), não falha de upstream. Devolve 404
             # acionável (como a OpenAI e como GET /v1/models/{id} já fazem) em
             # vez de um 502 que dispara alerta de 5xx à toa.
+            record_failed_request(
+                virtual_key_id=virtual_key_id,
+                model=body.model,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                error_type="model_not_found",
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={
@@ -185,6 +194,12 @@ async def chat_completions(
                     }
                 },
             ) from exc
+        record_failed_request(
+            virtual_key_id=virtual_key_id,
+            model=body.model,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error_type="upstream_error",
+        )
         status_code, etype, message, retry_after = _classify_upstream_error(exc.last_error)
         raise HTTPException(
             status_code=status_code,
@@ -198,6 +213,12 @@ async def chat_completions(
             headers={"Retry-After": retry_after} if retry_after else None,
         ) from exc
     except ProviderError as exc:
+        record_failed_request(
+            virtual_key_id=virtual_key_id,
+            model=body.model,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error_type="upstream_error",
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
@@ -250,8 +271,20 @@ async def _stream_response(
         success = True
     except NoProviderAvailableError as exc:
         if not exc.attempted_providers:
+            record_failed_request(
+                virtual_key_id=virtual_key_id,
+                model=request.model,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                error_type="model_not_found",
+            )
             yield _sse_error(f"Model '{request.model}' does not exist", "model_not_found")
             return
+        record_failed_request(
+            virtual_key_id=virtual_key_id,
+            model=request.model,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error_type="upstream_error",
+        )
         _, etype, message, retry_after = _classify_upstream_error(exc.last_error)
         yield _sse_error(
             message,
@@ -260,14 +293,32 @@ async def _stream_response(
             retry_after=retry_after,
         )
     except ProviderTimeoutError as exc:
+        record_failed_request(
+            virtual_key_id=virtual_key_id,
+            model=request.model,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error_type="timeout_error",
+        )
         yield _sse_error(f"Upstream provider timed out: {exc}", "timeout_error")
     except ProviderRateLimitedError as exc:
+        record_failed_request(
+            virtual_key_id=virtual_key_id,
+            model=request.model,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error_type="rate_limit_error",
+        )
         yield _sse_error(
             f"Upstream provider rate limited: {exc}",
             "rate_limit_error",
             retry_after=exc.retry_after,
         )
     except ProviderError as exc:
+        record_failed_request(
+            virtual_key_id=virtual_key_id,
+            model=request.model,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error_type="upstream_error",
+        )
         yield _sse_error(f"Upstream provider error: {exc}", "upstream_error")
     finally:
         if serving_provider is not None:
