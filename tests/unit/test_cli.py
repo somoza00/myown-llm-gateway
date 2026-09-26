@@ -185,3 +185,29 @@ def test_list_keys_subcommand_dispatches(monkeypatch) -> None:
     monkeypatch.setattr("sys.argv", ["llm-gateway", "list-keys"])
     cli.main()
     assert called == {"ran": True}
+
+
+async def test_list_keys_empty_prints_notice(monkeypatch, capsys) -> None:
+    """Sem chaves no banco: _list_keys avisa que não há chaves (UX correta)."""
+
+    async def _empty() -> list:
+        return []
+
+    # _list_keys importa list_keys de dentro da função; patch no módulo real.
+    monkeypatch.setattr("llm_gateway.storage.repositories.list_keys", _empty)
+    await cli._list_keys()
+    assert "No API keys found" in capsys.readouterr().out
+
+
+def test_create_key_no_expiry_and_days_are_mutually_exclusive(monkeypatch) -> None:
+    """--no-expiry combinado com --expires-in-days é recusado (argparse error)."""
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "llm-gateway", "create-key", "--client-name", "x",
+            "--no-expiry", "--expires-in-days", "30",
+        ],
+    )
+    with pytest.raises(SystemExit) as ei:
+        cli.main()
+    assert ei.value.code == 2  # parser.error() sai com código 2

@@ -281,6 +281,44 @@ async def test_unknown_model_is_logged_as_error_and_logs_endpoint(
 
 
 @respx.mock
+async def test_streaming_unknown_model_returns_404(client, registry, redis_stub, api_key) -> None:
+    """Modelo desconhecido no streaming devolve 404 real (não 200 + SSE error)."""
+    body = {**CHAT_BODY, "model": "gpt-5", "stream": True}
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    assert resp.status_code == 404, resp.text
+    error = resp.json()["error"]
+    error.pop("request_id", None)
+    assert error == {"message": "Model 'gpt-5' does not exist", "type": "model_not_found"}
+
+
+@respx.mock
+async def test_empty_bearer_token_401(client, registry, redis_stub, api_key) -> None:
+    """"Bearer " vazio é tratado como ausência de chave (401)."""
+    resp = await client.post(
+        "/v1/chat/completions", headers={"Authorization": "Bearer "}, json=CHAT_BODY
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["message"] == "Missing or invalid API key"
+
+
+@respx.mock
+async def test_chat_generic_provider_error_maps_to_502(
+    client, registry, redis_stub, api_key, monkeypatch
+) -> None:
+    """ProviderError genérico não-stream vira 502 upstream_error."""
+    from llm_gateway.core.exceptions import ProviderError
+    from llm_gateway.routers import chat
+
+    async def fake_handler(*args, **kwargs):
+        raise ProviderError("boom", provider="openai")
+
+    monkeypatch.setattr(chat, "handle_chat_completion", fake_handler)
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=CHAT_BODY)
+    assert resp.status_code == 502
+    assert resp.json()["error"]["type"] == "upstream_error"
+
+
+@respx.mock
 async def test_upstream_request_forwards_request_id(
     client, registry, redis_stub, api_key
 ) -> None:
