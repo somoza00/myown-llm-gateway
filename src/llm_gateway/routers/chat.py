@@ -158,19 +158,53 @@ def _enforce_max_tokens(body: ChatRequest) -> ChatRequest:
     return body
 
 
+def _reject_unknown_streaming_model(
+    body: ChatRequest, registry: ProviderRegistry, *, virtual_key_id: int, started: float
+) -> None:
+    """Rejeitar modelo desconhecido com 404 real ANTES de comitar o 200 do stream.
+
+    O streaming não consegue mais mudar o status depois de iniciado; sem isto um
+    modelo desconhecido viraria 200 + evento SSE de erro — inconsistente com o
+    non-streaming e GET /v1/models/{id} (e com a OpenAI para stream=True).
+    """
+    if any(body.model in p.config.supported_models for p in registry.all()):
+        return
+    record_failed_request(
+        virtual_key_id=virtual_key_id,
+        model=body.model,
+        latency_ms=int((time.monotonic() - started) * 1000),
+        error_type="model_not_found",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "error": {
+                "message": f"Model '{body.model}' does not exist",
+                "type": "model_not_found",
+            }
+        },
+    )
+
+
 @router.post("/v1/chat/completions", response_model=ChatResponse)
 async def chat_completions(
     body: ChatRequest, virtual_key_id: int = Depends(enforce_rate_limit)
 ) -> Response | ChatResponse:
     """Serve a chat completion: authenticate, then delegate to the gateway service."""
     body = _enforce_max_tokens(body)
+    started = time.monotonic()
     if body.stream:
+        # Valida o modelo ANTES de comitar o 200 do stream: um modelo
+        # desconhecido deve voltar 404 (como non-streaming e /v1/models), não
+        # 200 + evento SSE de erro (que o cliente vê como falso sucesso).
+        _reject_unknown_streaming_model(
+            body, get_registry(), virtual_key_id=virtual_key_id, started=started
+        )
         return StreamingResponse(
             _stream_response(body, get_registry(), virtual_key_id=virtual_key_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    started = time.monotonic()
     try:
         return await handle_chat_completion(body, get_registry(), virtual_key_id=virtual_key_id)
     except NoProviderAvailableError as exc:
