@@ -355,7 +355,10 @@ async def _stream_response(
         )
         yield _sse_error(f"Upstream provider error: {exc}", "upstream_error")
     finally:
-        if serving_provider is not None:
+        # Só registra uso "ok" quando o stream completou de fato: se o provedor
+        # morreu no meio, a falha já foi logada via record_failed_request (status=error)
+        # e gravar também um "ok" aqui criaria uma entrada dupla inconsistente no /api/logs.
+        if serving_provider is not None and success:
             schedule_stream_usage(
                 virtual_key_id=virtual_key_id,
                 provider=serving_provider,

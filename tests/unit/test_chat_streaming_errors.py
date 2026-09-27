@@ -83,3 +83,30 @@ def test_sse_error_includes_context_request_id(monkeypatch: pytest.MonkeyPatch) 
     assert payload["error"]["request_id"] == "rid-9"
     assert payload["error"]["attempted_providers"] == ["openai"]
     assert payload["error"]["retry_after"] == "7"
+
+
+async def test_failed_stream_does_not_record_ok_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stream que morre no meio NÃO grava linha de uso 'ok' (só a de falha)."""
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(name="openai")
+    provider = SimpleNamespace(config=config)
+
+    async def fake_stream(request, registry):
+        if False:
+            yield None, "x"
+        yield provider, "data: {}\n\n"
+        raise ProviderError("boom mid-stream", provider="openai")
+
+    monkeypatch.setattr(chat, "stream_chat_completion", fake_stream)
+    monkeypatch.setattr(chat, "record_failed_request", lambda **kw: None)
+
+    scheduled: list[dict] = []
+    monkeypatch.setattr(chat, "schedule_stream_usage", lambda **kw: scheduled.append(kw))
+
+    lines = await _collect(chat._stream_response(_req(), registry=None, virtual_key_id=1))
+    payload = json.loads(lines[-1][len("data: "):])
+    assert payload["error"]["type"] == "upstream_error"
+    # A falha já foi logada via record_failed_request (status=error): não deve
+    # gravar também um uso 'ok' — senão o /api/logs mostraria a falha como sucesso.
+    assert scheduled == []
