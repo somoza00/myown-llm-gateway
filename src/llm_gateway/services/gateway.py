@@ -99,7 +99,11 @@ async def handle_chat_completion(
     record = build_usage_record(
         virtual_key_id=virtual_key_id,
         provider_name=serving_provider.config.name,
-        pricing=serving_provider.config.pricing_for(response.model),
+        # Precifica pelo modelo REQUISITADO (chave estável na tabela de preços),
+        # não pelo nome ecoado pelo provedor — assim stream e non-stream reportam
+        # o mesmo custo para o mesmo request lógico (aliases/resoluções de nome
+        # não zeram o custo no usage_logs).
+        pricing=serving_provider.config.pricing_for(request.model),
         model=response.model,
         usage=response.usage,
         latency_ms=latency_ms,

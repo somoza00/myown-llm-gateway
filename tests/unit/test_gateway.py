@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from decimal import Decimal
 
 import httpx
 import pytest
 
 from llm_gateway.core.exceptions import NoProviderAvailableError, ProviderError
 from llm_gateway.models.api import ChatMessage, ChatRequest, ChatResponse, ChatResponseChoice, Usage
-from llm_gateway.models.provider import ProviderConfig
+from llm_gateway.models.provider import ModelPricing, ProviderConfig
 from llm_gateway.providers.base import BaseProvider
 from llm_gateway.providers.factory import ProviderRegistry
 from llm_gateway.services import gateway
@@ -153,3 +154,57 @@ async def test_inflight_entry_is_cleared_after_failure_so_retries_reach_the_prov
         await gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
 
     assert failing_provider.calls == 2  # the second attempt reached the provider again
+
+
+async def test_gateway_prices_by_requested_not_echoed_model(monkeypatch, redis_stub) -> None:
+    """Non-streaming precifica pelo modelo requisitado (estável), não pelo ecoado.
+
+    Provedor devolve `response.model="alias"` (sem preço na tabela) para um
+    request `gpt-4o` (com preço). Se o cálculo usasse `response.model`, o custo
+    sairia $0.00; deve sair o preço de `gpt-4o`.
+    """
+    config = ProviderConfig(
+        name="openai",
+        base_url="https://fake/v1",
+        supported_models=["gpt-4o"],
+        model_pricing={
+            "gpt-4o": ModelPricing(input_cost_per_1m=1_000_000, output_cost_per_1m=2_000_000)
+        },
+    )
+    reply = ChatResponse(
+        id="x",
+        created=1,
+        model="alias",  # provedor ecoa um nome sem preço configurado
+        choices=[ChatResponseChoice(message=ChatMessage(role="assistant", content="ok"))],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    class EchoProvider(BaseProvider):
+        calls = 0
+
+        def __init__(self) -> None:
+            super().__init__(config, httpx.AsyncClient())
+
+        async def chat_completion(self, request: ChatRequest) -> ChatResponse:
+            self.calls += 1
+            return reply
+
+        async def stream_chat_completion(self, request: ChatRequest) -> AsyncIterator[str]:
+            raise AssertionError("streaming not used here")
+            yield ""  # pragma: no cover
+
+    registry = ProviderRegistry([EchoProvider()], httpx.AsyncClient())
+
+    seen: dict[str, Decimal] = {}
+
+    async def fake_persist(record) -> None:
+        seen["cost"] = record.estimated_cost
+
+    monkeypatch.setattr(gateway, "persist_usage", fake_persist)
+
+    req = ChatRequest(model="gpt-4o", messages=[ChatMessage(role="user", content="hi")])
+    await gateway.handle_chat_completion(req, registry, virtual_key_id=1)
+    await asyncio.gather(*list(gateway._background_tasks))
+
+    # custo esperado = input 1e6 * 1/1e6 + output 2e6 * 1/1e6 = 3 (preço de gpt-4o)
+    assert seen["cost"] == Decimal("3")
