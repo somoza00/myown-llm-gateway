@@ -475,6 +475,15 @@ async def test_health_ready_degraded_when_redis_down(client, monkeypatch) -> Non
     assert body["database"] is True
 
 
+async def test_metrics_endpoint_exposes_prometheus_text(client) -> None:
+    """GET /metrics devolve o formato texto do Prometheus (público p/ scrape)."""
+    resp = await client.get("/metrics")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "llm_gateway_requests_total" in resp.text
+    assert "llm_gateway_latency_seconds" in resp.text
+
+
 async def test_models_lists_active_providers(client, registry, redis_stub, api_key) -> None:
     # The models endpoint is authenticated: 401 without a key
     resp = await client.get("/v1/models")
