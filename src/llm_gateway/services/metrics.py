@@ -8,6 +8,7 @@ from llm_gateway.core.logging import get_logger
 from llm_gateway.models.api import Usage
 from llm_gateway.models.provider import ModelPricing
 from llm_gateway.models.usage import UsageRecord
+from llm_gateway.services import prometheus_metrics
 
 logger = get_logger("metrics")
 
@@ -45,5 +46,6 @@ def build_usage_record(
 
 
 def emit_metric(record: UsageRecord) -> None:
-    """Emit a structured metric line for the request; cheap and non-blocking."""
+    """Emitir: linha de log estruturado + métricas Prometheus (sucesso)."""
     logger.info("usage_recorded", record=record.model_dump(mode="json"))
+    prometheus_metrics.record_usage(record)

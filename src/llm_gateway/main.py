@@ -23,7 +23,7 @@ from llm_gateway.core.logging import (
     configure_logging,
     get_logger,
 )
-from llm_gateway.routers import chat, health, logs, models
+from llm_gateway.routers import chat, health, logs, metrics, models
 from llm_gateway.storage.database import dispose_engine
 from llm_gateway.storage.redis import close_redis
 from llm_gateway.storage.redis import healthcheck as redis_healthcheck
@@ -151,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(models.router)
     app.include_router(logs.router)  # GET /api/logs para a UI /ui
+    app.include_router(metrics.router)  # GET /metrics (Prometheus/Grafana)
 
     # UI /ui: assa o build do frontend Vite (copiado para /app/ui na imagem).
     # Sem build presente (dev/test local), silenciosamente não monta.

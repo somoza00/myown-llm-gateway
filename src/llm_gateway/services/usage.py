@@ -8,6 +8,7 @@ from typing import Any
 
 from llm_gateway.core.logging import get_logger
 from llm_gateway.models.usage import UsageRecord
+from llm_gateway.services import prometheus_metrics
 from llm_gateway.storage.repositories import (
     UsageLogData,
     create_failed_usage_log,
@@ -32,6 +33,7 @@ def record_failed_request(
     error_type: str,
 ) -> None:
     """Schedule a failed-request log entry (status='error'); never raises."""
+    prometheus_metrics.record_failure(provider=provider, model=model, error_type=error_type)
     _fire_and_forget(
         create_failed_usage_log(
             virtual_key_id=virtual_key_id,
