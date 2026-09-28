@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from llm_gateway.storage.database import async_session_factory
 from llm_gateway.storage.orm import ApiKey, AuditLog, UsageLog
@@ -30,6 +30,34 @@ async def get_key_by_hash(key_hash: str) -> ApiKey | None:
     async with async_session_factory() as session:
         result = await session.execute(select(ApiKey).where(ApiKey.hashed_key == key_hash))
         return result.scalar_one_or_none()
+
+
+async def get_key_by_id(key_id: int) -> ApiKey | None:
+    """Return the API key record by its numeric id, or None."""
+    async with async_session_factory() as session:
+        return await session.get(ApiKey, key_id)
+
+
+async def get_key_spend_usd(key_id: int) -> Decimal:
+    """Accumulated estimated cost (USD) of successful usage for a virtual key."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(func.coalesce(func.sum(UsageLog.estimated_cost), 0)).where(
+                UsageLog.virtual_key_id == key_id, UsageLog.status == "ok"
+            )
+        )
+        return Decimal(str(result.scalar_one()))
+
+
+async def get_global_spend_usd() -> Decimal:
+    """Accumulated estimated cost (USD) of all successful usage (global cap)."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(func.coalesce(func.sum(UsageLog.estimated_cost), 0)).where(
+                UsageLog.status == "ok"
+            )
+        )
+        return Decimal(str(result.scalar_one()))
 
 
 async def create_usage_log(data: UsageLogData) -> None:

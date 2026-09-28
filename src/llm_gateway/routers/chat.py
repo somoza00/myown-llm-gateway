@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -36,7 +37,12 @@ from llm_gateway.services.streaming import (
     synthesize_cached_stream,
 )
 from llm_gateway.services.usage import record_failed_request
-from llm_gateway.storage.repositories import get_key_by_hash
+from llm_gateway.storage.repositories import (
+    get_global_spend_usd,
+    get_key_by_hash,
+    get_key_by_id,
+    get_key_spend_usd,
+)
 
 router = APIRouter(tags=["chat"])
 
@@ -104,6 +110,44 @@ async def enforce_rate_limit(
                 "X-RateLimit-Remaining": str(rl_status.remaining),
             },
         )
+    return virtual_key_id
+
+
+async def enforce_spend_cap(virtual_key_id: int = Depends(authenticate_request)) -> int:
+    """Rejeita (429 insufficient_quota) se o gasto acumulado da chave/global passou do teto em $.
+
+    Teto por chave vem de `api_keys.spend_limit_usd`; global de
+    `GLOBAL_SPEND_LIMIT_USD`. Soma o `estimated_cost` das linhas de uso com
+    `status='ok'`. A persistência de uso é fire-and-forget, então o enforcement
+    é ligeiramente atrasado em relação à última requisição — aceitável para um
+    teto de orçamento.
+    """
+    settings = get_settings()
+    key = await get_key_by_id(virtual_key_id)
+    if key is not None and key.spend_limit_usd is not None:
+        spent = await get_key_spend_usd(virtual_key_id)
+        if spent >= key.spend_limit_usd:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": {
+                        "message": f"Spend limit exceeded (${spent} >= ${key.spend_limit_usd})",
+                        "type": "insufficient_quota",
+                    }
+                },
+            )
+    if settings.GLOBAL_SPEND_LIMIT_USD is not None:
+        global_spent = await get_global_spend_usd()
+        if global_spent >= Decimal(str(settings.GLOBAL_SPEND_LIMIT_USD)):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": {
+                        "message": "Global spend limit exceeded",
+                        "type": "insufficient_quota",
+                    }
+                },
+            )
     return virtual_key_id
 
 
@@ -188,7 +232,9 @@ def _reject_unknown_streaming_model(
 
 @router.post("/v1/chat/completions", response_model=ChatResponse)
 async def chat_completions(
-    body: ChatRequest, virtual_key_id: int = Depends(enforce_rate_limit)
+    body: ChatRequest,
+    virtual_key_id: int = Depends(enforce_rate_limit),
+    _spend_guard: int = Depends(enforce_spend_cap),
 ) -> Response | ChatResponse:
     """Serve a chat completion: authenticate, then delegate to the gateway service."""
     body = _enforce_max_tokens(body)

@@ -90,9 +90,11 @@ async def test_create_key_with_expiry_persists_expires_at(db, capsys) -> None:
 def test_create_key_subcommand_dispatches(monkeypatch) -> None:
     called = {}
 
-    async def fake_create_key(client_name: str, *, expires_in_days: int | None = None) -> None:
+    async def fake_create_key(client_name: str, *, expires_in_days: int | None = None,
+                              spend_limit_usd: float | None = None) -> None:
         called["client_name"] = client_name
         called["expires_in_days"] = expires_in_days
+        called["spend_limit_usd"] = spend_limit_usd
 
     monkeypatch.setattr(cli, "_create_key", fake_create_key)
     monkeypatch.setattr(
@@ -100,15 +102,21 @@ def test_create_key_subcommand_dispatches(monkeypatch) -> None:
     )
     cli.main()
     # No --expires-in-days / --no-expiry given: falls back to the safe default.
-    assert called == {"client_name": "acme", "expires_in_days": cli.DEFAULT_KEY_EXPIRY_DAYS}
+    assert called == {
+        "client_name": "acme",
+        "expires_in_days": cli.DEFAULT_KEY_EXPIRY_DAYS,
+        "spend_limit_usd": None,
+    }
 
 
 def test_create_key_subcommand_passes_expires_in_days(monkeypatch) -> None:
     called = {}
 
-    async def fake_create_key(client_name: str, *, expires_in_days: int | None = None) -> None:
+    async def fake_create_key(client_name: str, *, expires_in_days: int | None = None,
+                              spend_limit_usd: float | None = None) -> None:
         called["client_name"] = client_name
         called["expires_in_days"] = expires_in_days
+        called["spend_limit_usd"] = spend_limit_usd
 
     monkeypatch.setattr(cli, "_create_key", fake_create_key)
     monkeypatch.setattr(
@@ -116,7 +124,45 @@ def test_create_key_subcommand_passes_expires_in_days(monkeypatch) -> None:
         ["llm-gateway", "create-key", "--client-name", "acme", "--expires-in-days", "30"],
     )
     cli.main()
-    assert called == {"client_name": "acme", "expires_in_days": 30}
+    assert called == {
+        "client_name": "acme",
+        "expires_in_days": 30,
+        "spend_limit_usd": None,
+    }
+
+
+async def test_create_key_with_spend_limit_persists(db, capsys) -> None:
+    """--spend-limit-usd persiste o teto e aparece na saída/audit."""
+    await cli._create_key("budget-client", spend_limit_usd=3.5)
+
+    captured = capsys.readouterr()
+    assert "Spend limit: $3.5" in captured.out
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(ApiKey).where(ApiKey.client_name == "budget-client")
+        )
+        key = result.scalar_one()
+    assert key.spend_limit_usd is not None
+    assert float(key.spend_limit_usd) == 3.5
+
+
+def test_create_key_subcommand_forwards_spend_limit(monkeypatch) -> None:
+    called = {}
+
+    async def fake_create_key(client_name: str, *, expires_in_days: int | None = None,
+                              spend_limit_usd: float | None = None) -> None:
+        called["client_name"] = client_name
+        called["spend_limit_usd"] = spend_limit_usd
+
+    monkeypatch.setattr(cli, "_create_key", fake_create_key)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["llm-gateway", "create-key", "--client-name", "acme", "--spend-limit-usd", "7.5"],
+    )
+    cli.main()
+    assert called["client_name"] == "acme"
+    assert called["spend_limit_usd"] == 7.5
 
 
 async def test_revoke_key_deactivates_and_writes_audit_log(db, capsys) -> None:

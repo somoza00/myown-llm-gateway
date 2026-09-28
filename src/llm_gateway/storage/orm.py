@@ -20,6 +20,9 @@ class ApiKey(Base):
     hashed_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     client_name: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Teto de gasto em USD para esta chave (None = sem limite). Aplicado por
+    # acumulador de `estimated_cost` das linhas de uso com status='ok'.
+    spend_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
