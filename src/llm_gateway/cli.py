@@ -23,7 +23,11 @@ def _serve() -> None:
     run()
 
 
-async def _create_key(client_name: str, *, expires_in_days: int | None = None) -> None:
+async def _create_key(
+    client_name: str, *, expires_in_days: int | None = None, spend_limit_usd: float | None = None
+) -> None:
+    from decimal import Decimal
+
     from llm_gateway.core.security import hash_key
     from llm_gateway.storage.database import async_session_factory
     from llm_gateway.storage.orm import ApiKey
@@ -40,17 +44,23 @@ async def _create_key(client_name: str, *, expires_in_days: int | None = None) -
             hashed_key=hash_key(raw_key),
             client_name=client_name,
             is_active=True,
+            spend_limit_usd=Decimal(str(spend_limit_usd)) if spend_limit_usd is not None else None,
             expires_at=expires_at,
         )
         session.add(key)
         await session.commit()
         await session.refresh(key)
 
+    detail_parts = []
+    if expires_at:
+        detail_parts.append(f"expires_at={expires_at.isoformat()}")
+    if key.spend_limit_usd is not None:
+        detail_parts.append(f"spend_limit_usd={key.spend_limit_usd}")
     await create_audit_log(
         action="key_created",
         virtual_key_id=key.id,
         client_name=client_name,
-        detail=f"expires_at={expires_at.isoformat()}" if expires_at else None,
+        detail="; ".join(detail_parts) or None,
     )
 
     print(f"Virtual API key created for '{client_name}' (id={key.id}):\n")
@@ -60,6 +70,8 @@ async def _create_key(client_name: str, *, expires_in_days: int | None = None) -
         print(f"Expires at: {expires_at.isoformat()}")
     else:
         print("This key never expires (created with --no-expiry).")
+    if key.spend_limit_usd is not None:
+        print(f"Spend limit: ${key.spend_limit_usd}")
 
 
 async def _revoke_key(key_id: int) -> None:
@@ -84,11 +96,15 @@ async def _list_keys() -> None:
         print("No API keys found.")
         return
 
-    print(f"{'id':<6}{'client_name':<30}{'active':<8}{'created_at':<26}{'expires_at':<26}")
+    print(
+        f"{'id':<6}{'client_name':<30}{'active':<8}{'spend_usd':<12}"
+        f"{'created_at':<26}{'expires_at':<26}"
+    )
     for key in keys:
         expires = key.expires_at.isoformat() if key.expires_at else "-"
+        spend = str(key.spend_limit_usd) if key.spend_limit_usd is not None else "-"
         print(
-            f"{key.id:<6}{key.client_name:<30}{str(key.is_active):<8}"
+            f"{key.id:<6}{key.client_name:<30}{str(key.is_active):<8}{spend:<12}"
             f"{key.created_at.isoformat():<26}{expires:<26}"
         )
 
@@ -118,6 +134,13 @@ def main() -> None:
         help="Create a permanent key that never expires. Not recommended: a leaked "
         "key with no expiry can be used indefinitely against your provider accounts.",
     )
+    create_key_parser.add_argument(
+        "--spend-limit-usd",
+        type=float,
+        default=None,
+        help="Hard monthly/dollar cap for this key. Once the accumulated estimated "
+        "cost reaches this, requests with the key are rejected (429 insufficient_quota).",
+    )
 
     revoke_key_parser = subparsers.add_parser(
         "revoke-key", help="Deactivate a virtual API key so it can no longer authenticate."
@@ -136,7 +159,13 @@ def main() -> None:
         expires_in_days = (
             None if args.no_expiry else (args.expires_in_days or DEFAULT_KEY_EXPIRY_DAYS)
         )
-        asyncio.run(_create_key(args.client_name, expires_in_days=expires_in_days))
+        asyncio.run(
+            _create_key(
+                args.client_name,
+                expires_in_days=expires_in_days,
+                spend_limit_usd=args.spend_limit_usd,
+            )
+        )
     elif args.command == "revoke-key":
         asyncio.run(_revoke_key(args.key_id))
     elif args.command == "list-keys":

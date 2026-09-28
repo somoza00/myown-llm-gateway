@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # opt in explicitly.
     RATE_LIMIT_FAIL_OPEN: bool = False
 
+    # Teto global de gasto em USD (None = sem limite). Soma o estimated_cost de
+    # todas as linhas de uso ok; quando atingido, todas as requisições são
+    # rejeitadas (hard-stop fail-closed) até o limite ser elevado/removido.
+    GLOBAL_SPEND_LIMIT_USD: float | None = None
+
     # Hard ceiling on `max_tokens` per request; requests above it are rejected,
     # and requests that omit `max_tokens` get this value instead of an
     # unbounded provider default. Protects against a single request generating

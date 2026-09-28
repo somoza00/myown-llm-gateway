@@ -302,6 +302,23 @@ async def test_empty_bearer_token_401(client, registry, redis_stub, api_key) -> 
 
 
 @respx.mock
+async def test_chat_rejected_when_key_spend_limit_reached(client, redis_stub, capsys) -> None:
+    """Chave com teto de gasto atingido (0) é rejeitada (429 insufficient_quota)."""
+    from llm_gateway import cli
+
+    await cli._create_key("capped-key", spend_limit_usd=0)
+    raw = next(
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("sk-")
+    )
+
+    resp = await client.post(
+        "/v1/chat/completions", headers={"Authorization": f"Bearer {raw}"}, json=CHAT_BODY
+    )
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["error"]["type"] == "insufficient_quota"
+
+
+@respx.mock
 async def test_chat_generic_provider_error_maps_to_502(
     client, registry, redis_stub, api_key, monkeypatch
 ) -> None:
