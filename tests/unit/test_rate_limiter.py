@@ -150,6 +150,30 @@ async def test_redis_failure_fails_open_when_explicitly_configured(monkeypatch) 
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
 
 
+async def test_redis_failure_open_reports_full_quota_remaining(monkeypatch) -> None:
+    """Fail-open: o header não contradiz allowed=True (remaining cheio, não 0).
+
+    remaining=0 com allowed=True faria um cliente com backoff em
+    X-RateLimit-Remaining==0 se autolimitar à toa durante o downgrade.
+    """
+    monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_FAIL_OPEN", True)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 10)
+    st = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+    assert st.allowed is True
+    assert st.remaining == 10
+
+
+async def test_redis_failure_closed_reports_zero_remaining(monkeypatch) -> None:
+    """Fail-closed: remaining=0 é coerente com a rejeição da requisição."""
+    monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_FAIL_OPEN", False)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 10)
+    st = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+    assert st.allowed is False
+    assert st.remaining == 0
+
+
 async def test_redis_failure_logs_warning_with_key_and_error(monkeypatch) -> None:
     monkeypatch.setattr(rate_limiter, "redis_client", BrokenRedis())
     with capture_logs() as logs:
