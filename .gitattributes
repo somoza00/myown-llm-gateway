@@ -1,0 +1,3 @@
+# Normaliza fim de linha para LF em qualquer SO (complementa o .editorconfig),
+# evitando diffs de CRLF. Referência apenas — não muda comportamento.
+* text=auto eol=lf
