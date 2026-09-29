@@ -41,10 +41,14 @@ async def check_rate_limit_status(virtual_key_id: int) -> RateLimitStatus:
             _, _, count, _ = await pipe.execute()
     except RedisError as exc:
         logger.warning("rate_limit_check_failed", virtual_key_id=virtual_key_id, error=str(exc))
+        # Fail-open: passa, mas não afirma cota falsa (o count é desconhecido
+        # com Redis fora). remaining=0 contradizia allowed=True e faria clientes
+        # com backoff em X-RateLimit-Remaining==0 se autolimitarem à toa.
+        remaining = settings.RATE_LIMIT_REQUESTS if settings.RATE_LIMIT_FAIL_OPEN else 0
         return RateLimitStatus(
             allowed=settings.RATE_LIMIT_FAIL_OPEN,
             limit=settings.RATE_LIMIT_REQUESTS,
-            remaining=0,
+            remaining=remaining,
             window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
         )
     remaining = max(0, settings.RATE_LIMIT_REQUESTS - count)
