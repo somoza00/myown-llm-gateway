@@ -211,7 +211,13 @@ def _reject_unknown_streaming_model(
     modelo desconhecido viraria 200 + evento SSE de erro — inconsistente com o
     non-streaming e GET /v1/models/{id} (e com a OpenAI para stream=True).
     """
-    if any(body.model in p.config.supported_models for p in registry.all()):
+    # Provedor com `supported_models` vazio é wildcard (aceita qualquer modelo,
+    # ver select_providers no services/router). Membresia estrita aqui divergia
+    # do non-streaming e rejeitava 404 modelos que seriam roteados/callados.
+    if any(
+        not p.config.supported_models or body.model in p.config.supported_models
+        for p in registry.all()
+    ):
         return
     record_failed_request(
         virtual_key_id=virtual_key_id,

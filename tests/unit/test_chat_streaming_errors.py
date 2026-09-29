@@ -110,3 +110,36 @@ async def test_failed_stream_does_not_record_ok_usage(monkeypatch: pytest.Monkey
     # A falha já foi logada via record_failed_request (status=error): não deve
     # gravar também um uso 'ok' — senão o /api/logs mostraria a falha como sucesso.
     assert scheduled == []
+
+
+def test_reject_unknown_streaming_model_respects_wildcard_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provedor com supported_models vazio (wildcard) não rejeita modelo no stream.
+
+    `select_providers`/fallback tratam a lista vazia como wildcard; o pré-cheque
+    de streaming usava membresia estrita e devolvia 404 para o mesmo modelo que
+    o non-streaming serviria.
+    """
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    monkeypatch.setattr(chat, "record_failed_request", lambda **kw: None)
+
+    wildcard = SimpleNamespace(config=SimpleNamespace(supported_models=[]))
+    chat._reject_unknown_streaming_model(
+        _req(), SimpleNamespace(all=lambda: [wildcard]), virtual_key_id=1, started=0.0
+    )
+
+    restricted = SimpleNamespace(config=SimpleNamespace(supported_models=["a", "b"]))
+    with pytest.raises(FastAPIHTTPException) as ei:
+        chat._reject_unknown_streaming_model(
+            _req(), SimpleNamespace(all=lambda: [restricted]), virtual_key_id=1, started=0.0
+        )
+    assert ei.value.status_code == 404
+
+    ok = SimpleNamespace(config=SimpleNamespace(supported_models=["a", "b", "m"]))
+    chat._reject_unknown_streaming_model(
+        _req(), SimpleNamespace(all=lambda: [ok]), virtual_key_id=1, started=0.0
+    )
