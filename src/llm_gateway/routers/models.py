@@ -43,18 +43,31 @@ async def get_model(
 ) -> dict[str, object]:
     """Return a single model's metadata, OpenAI /v1/models/{id} style; 404 if unknown."""
     owner: str | None = None
+    wildcard_owner: str | None = None
     for provider in _providers_by_priority(get_registry()):
+        if not provider.config.supported_models:
+            # Provedor wildcard (supported_models vazio) serve QUALQUER modelo —
+            # a mesma semântica de select_providers e _reject_unknown_streaming_model.
+            # `break` não ocorre: segue para achar um dono explícito de menor priority.
+            if wildcard_owner is None:
+                wildcard_owner = provider.config.name
+            continue
         if model_id in provider.config.supported_models:
             owner = provider.config.name
             break
-    if owner is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "message": f"model '{model_id}' not found",
-                    "type": "model_not_found",
-                }
-            },
-        )
-    return {"id": model_id, "object": "model", "created": 0, "owned_by": owner}
+    if owner is not None:
+        return {"id": model_id, "object": "model", "created": 0, "owned_by": owner}
+    if wildcard_owner is not None:
+        # O roteador serviria o modelo via provedor wildcard; 404 aqui seria
+        # inconsistente com o roteamento real (mesmo bug do streaming, já
+        # corrigido para select_providers).
+        return {"id": model_id, "object": "model", "created": 0, "owned_by": wildcard_owner}
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": {
+                "message": f"model '{model_id}' not found",
+                "type": "model_not_found",
+            }
+        },
+    )
