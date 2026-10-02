@@ -133,6 +133,9 @@ async def test_chat_completions_rate_limited(
         # gastar outra requisição numa consulta de volta).
         assert resp.headers.get("x-ratelimit-limit") == "2"
         assert resp.headers.get("x-ratelimit-remaining") is not None
+        # X-RateLimit-Reset: enquanto a janela reinicia (o tamanho da janela),
+        # para o cliente agendar o retry sem adivinhar.
+        assert resp.headers.get("x-ratelimit-reset") == "60"
 
     await asyncio.sleep(0.05)  # let the fire-and-forget usage-persist tasks finish
 
