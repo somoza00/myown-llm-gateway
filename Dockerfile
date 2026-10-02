@@ -1,5 +1,5 @@
 # UI / Logs dashboard — build dentro da própria imagem.
-FROM node:22-alpine AS ui-builder
+FROM node:26-alpine AS ui-builder
 WORKDIR /ui
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
