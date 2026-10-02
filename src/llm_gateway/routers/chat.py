@@ -92,12 +92,15 @@ async def enforce_rate_limit(
 ) -> int:
     """Reject with 429 once the virtual key exceeds its quota; expose quota via headers.
 
-    Sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every authenticated
-    response, so clients can back off without waiting for a 429.
+    Sets `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` on
+    every authenticated response, so clients can back off without waiting for a 429.
     """
     rl_status = await check_rate_limit_status(virtual_key_id)
     response.headers["X-RateLimit-Limit"] = str(rl_status.limit)
     response.headers["X-RateLimit-Remaining"] = str(rl_status.remaining)
+    # X-RateLimit-Reset: segundos até a janela do rate-limit reiniciar (o
+    # tamanho da janela). Client pode agendar o retry sem adivinhar/quebrar.
+    response.headers["X-RateLimit-Reset"] = str(rl_status.window_seconds)
     if not rl_status.allowed:
         settings = get_settings()
         record_failed_request(virtual_key_id=virtual_key_id, error_type="rate_limited")
@@ -108,6 +111,7 @@ async def enforce_rate_limit(
                 "Retry-After": str(settings.RATE_LIMIT_WINDOW_SECONDS),
                 "X-RateLimit-Limit": str(rl_status.limit),
                 "X-RateLimit-Remaining": str(rl_status.remaining),
+                "X-RateLimit-Reset": str(rl_status.window_seconds),
             },
         )
     return virtual_key_id
