@@ -63,3 +63,32 @@ async def test_redis_failure_is_tolerated(monkeypatch) -> None:
     monkeypatch.setattr("llm_gateway.services.cache.redis_client", BrokenRedis())
     assert await cache.get("key-1") is None
     await cache.set("key-1", make_response())  # must not raise
+
+
+async def test_cache_events_are_counted(redis_stub) -> None:
+    """get() incrementa o contador de eventos do cache (hit/miss) para observabilidade."""
+    from llm_gateway.services import prometheus_metrics as pm
+
+    def val(result: str) -> float:
+        return pm.CACHE_EVENTS.labels(result=result)._value.get()
+
+    hit0, miss0 = val("hit"), val("miss")
+    await cache.get("unknown-key")  # miss
+    await cache.set("k2", make_response())
+    await cache.get("k2")  # hit
+    assert val("miss") == miss0 + 1
+    assert val("hit") == hit0 + 1
+
+
+async def test_cache_redis_error_is_counted(monkeypatch) -> None:
+    """Falha de Redis no get() incrementa o evento 'error' (não some da métrica)."""
+    from llm_gateway.services import prometheus_metrics as pm
+
+    class BrokenRedis:
+        async def get(self, key: str) -> str | None:
+            raise RedisError("down")
+
+    monkeypatch.setattr("llm_gateway.services.cache.redis_client", BrokenRedis())
+    err0 = pm.CACHE_EVENTS.labels(result="error")._value.get()
+    assert await cache.get("k3") is None
+    assert pm.CACHE_EVENTS.labels(result="error")._value.get() == err0 + 1

@@ -9,6 +9,7 @@ from redis.exceptions import RedisError
 
 from llm_gateway.core.config import get_settings
 from llm_gateway.models.api import ChatRequest, ChatResponse
+from llm_gateway.services.prometheus_metrics import record_cache_event
 from llm_gateway.storage.redis import redis_client
 
 settings = get_settings()
@@ -41,9 +42,12 @@ async def get(key: str) -> ChatResponse | None:
     try:
         raw = await redis_client.get(key)
     except RedisError:
+        record_cache_event("error")
         return None
     if raw is None:
+        record_cache_event("miss")
         return None
+    record_cache_event("hit")
     return ChatResponse.model_validate_json(raw)
 
 
