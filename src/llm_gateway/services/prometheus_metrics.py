@@ -38,6 +38,12 @@ LATENCY = Histogram(
     ["provider"],
     registry=registry,
 )
+CACHE_EVENTS = Counter(
+    "llm_gateway_cache_events_total",
+    "Eventos do cache de resposta (hit/miss/erro de Redis)",
+    ["result"],
+    registry=registry,
+)
 
 
 def _safe(value: str) -> str:
@@ -60,6 +66,15 @@ def record_failure(provider: str, model: str, error_type: str) -> None:
     REQUESTS.labels(
         provider=_safe(provider), model=_safe(model), status=f"error:{error_type}"
     ).inc()
+
+
+def record_cache_event(result: str) -> None:
+    """Incrementa o contador de eventos do cache (hit/miss/error).
+
+    Sem isto, a efetividade do cache (razão hit/miss) e indisponibilidade do
+    Redis não eram observáveis nas métricas.
+    """
+    CACHE_EVENTS.labels(result=result).inc()
 
 
 def render() -> bytes:
