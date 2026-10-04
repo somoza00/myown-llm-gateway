@@ -62,6 +62,11 @@ class AnthropicProvider(BaseProvider):
         }
         if system:
             payload["system"] = system
+        if request.top_p is not None:
+            # Anthropic suporta top_p (mas NÃO frequency/presence_penalty). Sem
+            # isto, top_p era silenciosamente ignorado nos modelos Anthropic,
+            # enquanto os provedores OpenAI-compat o repassam.
+            payload["top_p"] = request.top_p
 
         response = await self._post(
             f"{self.base_url}/v1/messages",
@@ -111,6 +116,8 @@ class AnthropicProvider(BaseProvider):
         }
         if system:
             payload["system"] = system
+        if request.top_p is not None:
+            payload["top_p"] = request.top_p
 
         chunk_id = ""
         model = request.model
