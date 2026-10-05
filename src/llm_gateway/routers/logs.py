@@ -13,14 +13,19 @@ router = APIRouter(prefix="/api", tags=["logs"])
 @router.get("/logs")
 async def list_logs(
     limit: int = Query(default=100, ge=1, le=500, description="Máx. de registros retornados."),
+    status: str | None = Query(
+        default=None, description="Filtra por status exato ('ok' ou 'error')."
+    ),
+    model: str | None = Query(default=None, description="Filtra por modelo exato."),
     _virtual_key_id: int = Depends(authenticate_request),
 ) -> dict[str, object]:
     """Retorna os logs recentes de requisições (uso + falhas), do mais novo pro mais antigo.
 
-    Requer autenticação por chave virtual. Campos usados pela UI:
+    Requer autenticação por chave virtual. Filtros opcionais `status` e `model`
+    permitem ao dashboard estreitar a lista. Campos usados pela UI:
     timestamp, model, provider, tokens, latency_ms, status, error_type.
     """
-    logs = await list_usage_logs(limit)
+    logs = await list_usage_logs(limit, status=status, model=model)
     return {
         "logs": [
             {

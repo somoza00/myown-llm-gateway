@@ -89,12 +89,18 @@ async def create_failed_usage_log(
         await session.commit()
 
 
-async def list_usage_logs(limit: int) -> list[UsageLog]:
-    """Return the most recent `limit` usage logs, newest first."""
+async def list_usage_logs(
+    limit: int, *, status: str | None = None, model: str | None = None
+) -> list[UsageLog]:
+    """Return the most recent `limit` usage logs (newest first), optionally filtered
+    by exact `status` ('ok'/'error') and/or exact `model`."""
+    stmt = select(UsageLog)
+    if status is not None:
+        stmt = stmt.where(UsageLog.status == status)
+    if model is not None:
+        stmt = stmt.where(UsageLog.model == model)
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(UsageLog).order_by(UsageLog.id.desc()).limit(limit)
-        )
+        result = await session.execute(stmt.order_by(UsageLog.id.desc()).limit(limit))
         return list(result.scalars().all())
 
 
