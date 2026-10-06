@@ -92,3 +92,31 @@ async def test_cache_redis_error_is_counted(monkeypatch) -> None:
     err0 = pm.CACHE_EVENTS.labels(result="error")._value.get()
     assert await cache.get("k3") is None
     assert pm.CACHE_EVENTS.labels(result="error")._value.get() == err0 + 1
+
+
+async def test_lock_acquire_release_roundtrip(redis_stub) -> None:
+    """O lock distribuído é exclusivo e liberado só pelo dono."""
+    token = await cache.acquire_lock("k")
+    assert token is not None
+    assert await cache.acquire_lock("k") is None  # segunda réplica não pega
+    await cache.release_lock("k", token)
+    assert await cache.acquire_lock("k") is not None  # liberado
+
+
+async def test_release_lock_ignores_foreign_token(redis_stub) -> None:
+    """Um token que não é o dono NÃO libera o lock (evita liberar o de outra réplica)."""
+    token = await cache.acquire_lock("k")
+    assert token is not None
+    await cache.release_lock("k", "token-de-outra-replica")
+    assert await cache.acquire_lock("k") is None  # continua preso
+
+
+async def test_wait_for_result_returns_cached(redis_stub) -> None:
+    await cache.set("k2", make_response())
+    got = await cache.wait_for_result("k2", timeout_s=0.2)
+    assert got is not None
+    assert got.choices[0].message.content == "ok"
+
+
+async def test_wait_for_result_times_out_when_empty(redis_stub) -> None:
+    assert await cache.wait_for_result("empty", timeout_s=0.1) is None

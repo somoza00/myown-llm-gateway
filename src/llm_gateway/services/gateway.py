@@ -62,6 +62,8 @@ async def handle_chat_completion(
 
     Concurrent cache-miss requests for the same cache key are coalesced: only the
     first triggers a provider call, the rest await its result (see `_inflight`).
+    Across replicas, a Redis lock (`cache_service.acquire_lock`) makes a single
+    replica the caller while the others briefly wait for the result to be cached.
     """
     started = time.monotonic()
     cache_key = cache_service.build_cache_key(request, namespace=virtual_key_id)
@@ -78,6 +80,19 @@ async def handle_chat_completion(
         )
         return response
 
+    # Cross-replica single-flight: só uma réplica deve chamar o provedor para
+    # este cache key. Quem ganha o lock Redis faz a chamada; os demais esperam
+    # (breve e limitado) o resultado chegar ao cache. Dentro de um processo, o
+    # future `_inflight` acima já coalesceu — isto cobre o caso cross-réplica.
+    lock_token = await cache_service.acquire_lock(cache_key)
+    if lock_token is None:
+        waited = await cache_service.wait_for_result(cache_key)
+        if waited is not None:
+            _record_cache_style_usage(
+                virtual_key_id=virtual_key_id, response=waited, started=started
+            )
+            return waited
+
     future: asyncio.Future[ChatResponse] = asyncio.get_running_loop().create_future()
     _inflight[cache_key] = future
     try:
@@ -91,6 +106,8 @@ async def handle_chat_completion(
         raise
     finally:
         del _inflight[cache_key]
+        if lock_token is not None:
+            await cache_service.release_lock(cache_key, lock_token)
     future.set_result(response)
 
     latency_ms = int((time.monotonic() - started) * 1000)

@@ -8,7 +8,9 @@ deploy de um worker (default do compose). Para múltiplos workers, o
 
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest
+import os
+
+from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest, multiprocess
 
 from llm_gateway.models.usage import UsageRecord
 
@@ -78,5 +80,16 @@ def record_cache_event(result: str) -> None:
 
 
 def render() -> bytes:
-    """Serializa as métricas no formato texto do Prometheus."""
+    """Serializa as métricas no formato texto do Prometheus.
+
+    Em modo multiprocess (`PROMETHEUS_MULTIPROC_DIR` definido — necessário com
+    >1 worker, senão cada processo só reporta os próprios contadores), agrega
+    os arquivos de todos os processos via `MultiProcessCollector`. Sem a env
+    var, usa o registry do próprio processo (1 worker).
+    """
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        aggregated = CollectorRegistry()
+        # prometheus_client não traz stubs para MultiProcessCollector.
+        multiprocess.MultiProcessCollector(aggregated)  # type: ignore[no-untyped-call]
+        return generate_latest(aggregated)
     return generate_latest(registry)

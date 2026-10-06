@@ -57,3 +57,11 @@ def test_render_defaults_empty_labels_to_unknown() -> None:
         body, "llm_gateway_requests_total",
         provider="unknown", model="unknown", status="error:upstream_error",
     )
+
+
+def test_render_multiprocess_branch_uses_collector(monkeypatch, tmp_path) -> None:
+    """Com PROMETHEUS_MULTIPROC_DIR, o render agrega via MultiProcessCollector
+    (não o registry do processo) — requisito para rodar com >1 worker."""
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    body = prometheus_metrics.render()  # dir vazio → agrega nada, mas não quebra
+    assert isinstance(body, bytes)
