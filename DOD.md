@@ -40,8 +40,10 @@ priority, fallback, cache Redis, rate limit, spend cap e SSE.
 - [x] Fallback entre provedores; cache Redis namespaced por chave + single-flight;
       rate limit por chave.
 - [x] `/metrics` Prometheus (requests/tokens/custo/latência/cache).
-- [ ] `PROMETHEUS_MULTIPROC_DIR` se rodar > 1 worker.
-- [ ] Single-flight distribuído (lock Redis) se houver > 1 réplica.
+- [x] `PROMETHEUS_MULTIPROC_DIR` se rodar > 1 worker (opt-in; sem a env var,
+      mantém o registry do processo).
+- [x] Single-flight distribuído (lock Redis) se houver > 1 réplica — com
+      fallback local se o lock estiver preso/ocioso.
 
 🟢 **Nice-to-have**
 - [ ] Tracing OTel; dashboard Grafana; alerta de gasto.
