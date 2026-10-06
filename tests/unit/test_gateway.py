@@ -208,3 +208,24 @@ async def test_gateway_prices_by_requested_not_echoed_model(monkeypatch, redis_s
 
     # custo esperado = input 1e6 * 1/1e6 + output 2e6 * 1/1e6 = 3 (preço de gpt-4o)
     assert seen["cost"] == Decimal("3")
+
+
+async def test_lock_held_by_other_replica_falls_back_to_provider(
+    redis_stub, monkeypatch
+) -> None:
+    """Se outra réplica segura o lock e nada chega ao cache, calcula localmente."""
+    async def _no_wait(cache_key, *, timeout_s=2.0):
+        return None
+
+    monkeypatch.setattr(gateway.cache_service, "wait_for_result", _no_wait)
+    release = asyncio.Event()
+    release.set()
+    provider = SlowStubProvider(make_response(), release=release)
+    registry = ProviderRegistry([provider], httpx.AsyncClient())
+
+    key = gateway.cache_service.build_cache_key(REQUEST, namespace=1)
+    redis_stub.store[f"lock:{key}"] = "outra-replica"  # lock preso por outra réplica
+
+    response = await gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+    assert response.choices[0].message.content == "ok"
+    assert provider.calls == 1  # caiu no provider (fallback), não travou
