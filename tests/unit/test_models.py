@@ -65,3 +65,20 @@ def test_accepts_conversation_with_user_among_others() -> None:
             {"role": "user", "content": "hi"},
         ],
     )
+
+
+def test_accepts_stop_as_string_or_up_to_four_sequences() -> None:
+    ChatRequest(model="m", messages=_messages(1), stop="###")
+    ChatRequest(model="m", messages=_messages(1), stop=["###", "</answer>"])
+
+
+def test_rejects_blank_stop_sequence() -> None:
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), stop="")
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), stop=["ok", ""])
+
+
+def test_rejects_more_than_four_stop_sequences() -> None:
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), stop=["a", "b", "c", "d", "e"])

@@ -67,6 +67,13 @@ class AnthropicProvider(BaseProvider):
             # isto, top_p era silenciosamente ignorado nos modelos Anthropic,
             # enquanto os provedores OpenAI-compat o repassam.
             payload["top_p"] = request.top_p
+        if request.stop is not None:
+            # Anthropic nomeia o campo `stop_sequences` e exige lista; o
+            # `stop` OpenAI aceita string ou lista — normaliza para lista aqui
+            # (mesmo cuidado do top_p: o adapter manual não herda o repasse).
+            payload["stop_sequences"] = (
+                [request.stop] if isinstance(request.stop, str) else request.stop
+            )
 
         response = await self._post(
             f"{self.base_url}/v1/messages",
@@ -118,6 +125,10 @@ class AnthropicProvider(BaseProvider):
             payload["system"] = system
         if request.top_p is not None:
             payload["top_p"] = request.top_p
+        if request.stop is not None:
+            payload["stop_sequences"] = (
+                [request.stop] if isinstance(request.stop, str) else request.stop
+            )
 
         chunk_id = ""
         model = request.model

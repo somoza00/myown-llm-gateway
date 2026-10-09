@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Role = Literal["system", "user", "assistant"]
 FinishReason = Literal["stop", "length", "content_filter"]
@@ -29,7 +29,28 @@ class ChatRequest(BaseModel):
     frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
+    # OpenAI-style stop sequences: a single string or up to 4 strings. Providers
+    # that name the field differently (Anthropic: `stop_sequences`) translate it
+    # in their adapter; the OpenAI-compatible ones pass it straight through.
+    stop: str | list[str] | None = Field(default=None)
     stream: bool = False
+
+    @field_validator("stop")
+    @classmethod
+    def _stop_within_bounds(cls, value: str | list[str] | None) -> str | list[str] | None:
+        """Accept one string or up to 4 non-blank stop sequences.
+
+        Providers reject a 5th sequence or a blank entry as an upstream 400;
+        failing fast as a 422 here keeps the error at the gateway boundary.
+        """
+        if value is None:
+            return value
+        sequences = [value] if isinstance(value, str) else value
+        if not sequences or any(not sequence for sequence in sequences):
+            raise ValueError("stop sequences não podem ser vazias")
+        if len(sequences) > 4:
+            raise ValueError("no máximo 4 stop sequences")
+        return value
 
     @model_validator(mode="after")
     def _require_user_message(self: ChatRequest) -> ChatRequest:

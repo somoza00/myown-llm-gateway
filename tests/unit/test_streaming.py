@@ -151,6 +151,32 @@ async def test_anthropic_stream_translates_to_openai_format() -> None:
     assert captured["body"]["messages"] == [{"role": "user", "content": "hi"}]
 
 
+async def test_anthropic_stream_forwards_stop_sequences() -> None:
+    """`stop` também chega como `stop_sequences` no caminho de streaming."""
+    captured: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(
+            200, text=ANTHROPIC_SSE, headers={"Content-Type": "text/event-stream"}
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = AnthropicProvider(
+        ProviderConfig(name="anthropic", base_url="https://fake", supported_models=["claude-x"]),
+        client,
+        api_key="k",
+    )
+    req = ChatRequest(
+        model="claude-x",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stop="END",
+    )
+    _ = [line async for line in provider.stream_chat_completion(req)]
+    assert captured["body"]["stop_sequences"] == ["END"]
+
+
 # A real upstream SSE body: each "data: ..." line is followed by a blank line.
 # httpx's aiter_lines() yields both the content line and the blank separator,
 # so the passthrough must drop the blank ones instead of re-wrapping them.

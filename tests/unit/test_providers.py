@@ -259,6 +259,71 @@ async def test_anthropic_omits_top_p_when_unset() -> None:
 
 
 @respx.mock
+async def test_anthropic_forwards_stop_as_stop_sequences() -> None:
+    """`stop` (string OpenAI) vira `stop_sequences` (lista) no payload da Anthropic."""
+    route = respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_stop",
+                "model": "claude-3-5-sonnet-latest",
+                "stop_reason": "stop_sequence",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    provider = make_anthropic_provider()
+    request = ChatRequest(
+        model="claude-3-5-sonnet-latest",
+        messages=[ChatMessage(role="user", content="hi")],
+        stop="###",
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert sent_payload["stop_sequences"] == ["###"]
+
+
+@respx.mock
+async def test_anthropic_omits_stop_sequences_when_unset() -> None:
+    """Sem `stop`, o payload não inclui `stop_sequences` (não manda null)."""
+    route = respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_nostop",
+                "model": "claude-3-5-sonnet-latest",
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    provider = make_anthropic_provider()
+    request = ChatRequest(
+        model="claude-3-5-sonnet-latest", messages=[ChatMessage(role="user", content="hi")]
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert "stop_sequences" not in sent_payload
+
+
+@respx.mock
+async def test_openai_passes_stop_through_unchanged() -> None:
+    """O adapter OpenAI-compat repassa `stop` sem renomear (model_dump)."""
+    route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=OPENAI_BODY))
+    provider = make_openai_provider()
+    request = ChatRequest(
+        model="gpt-4o",
+        messages=[ChatMessage(role="user", content="hi")],
+        stop=["###", "STOP"],
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert sent_payload["stop"] == ["###", "STOP"]
+
+
+@respx.mock
 async def test_mistral_openai_compatible_passthrough() -> None:
     respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=OPENAI_BODY))
     provider = make_mistral_provider()
