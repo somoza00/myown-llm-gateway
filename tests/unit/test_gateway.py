@@ -229,3 +229,50 @@ async def test_lock_held_by_other_replica_falls_back_to_provider(
     response = await gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
     assert response.choices[0].message.content == "ok"
     assert provider.calls == 1  # caiu no provider (fallback), não travou
+
+
+async def test_two_leaders_for_same_key_do_not_crash_on_inflight_cleanup(
+    redis_stub, monkeypatch
+) -> None:
+    """Regressão: dois "líderes" para o MESMO cache key (nenhum obtém o lock Redis
+    e o wait estoura) registravam cada um um future em `_inflight`; o `del`
+    incondicional no finally do segundo dava KeyError → 500 cru."""
+    gate = asyncio.Event()
+    lock_calls = {"n": 0}
+
+    async def _gated_lock(cache_key):
+        # O 1º request segura o loop no gate (já passou pela checagem de
+        # `_inflight` sem ter registrado o future); o 2º recebe None na hora —
+        # é a janela em que os dois viram "líderes".
+        lock_calls["n"] += 1
+        if lock_calls["n"] == 1:
+            await gate.wait()
+        return None
+
+    async def _no_wait(cache_key, *, timeout_s=2.0):
+        return None
+
+    monkeypatch.setattr(gateway.cache_service, "acquire_lock", _gated_lock)
+    monkeypatch.setattr(gateway.cache_service, "wait_for_result", _no_wait)
+
+    release = asyncio.Event()
+    provider = SlowStubProvider(make_response(), release=release)
+    registry = ProviderRegistry([provider], httpx.AsyncClient())
+
+    first = asyncio.create_task(
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+    )
+    await asyncio.sleep(0)  # first para no gate, ANTES de registrar o future
+    second = asyncio.create_task(
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+    )
+    await asyncio.sleep(0)  # second passa por _inflight (vazio) e registra o seu
+
+    gate.set()
+    await asyncio.sleep(0)  # first retoma e sobrescreve _inflight com o futuro dele
+    release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert not any(isinstance(r, Exception) for r in results), results
+    assert all(r.choices[0].message.content == "ok" for r in results)
+    assert gateway._inflight == {}

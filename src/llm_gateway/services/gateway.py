@@ -105,7 +105,12 @@ async def handle_chat_completion(
         future.exception()
         raise
     finally:
-        del _inflight[cache_key]
+        # Remove só o NOSSO future. Um segundo "líder" (lock Redis perdido e o
+        # `wait_for_result` estourando) pode ter sobrescrito a entrada com o
+        # future dele; um `del` cego nesse caso dava KeyError → 500 cru — senda
+        # que o `wait_for_result` tem timeout de 2s e LLMs costumam demorar mais.
+        if _inflight.get(cache_key) is future:
+            del _inflight[cache_key]
         if lock_token is not None:
             await cache_service.release_lock(cache_key, lock_token)
     future.set_result(response)
