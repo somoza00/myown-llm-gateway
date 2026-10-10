@@ -154,7 +154,11 @@ class AnthropicProvider(BaseProvider):
                 message = event.get("message", {})
                 chunk_id = message.get("id", chunk_id)
                 model = message.get("model", model)
-                usage = event.get("usage")
+                # A `usage` do message_start vem ANINHADA em `message`
+                # (event.message.usage), não no topo do evento. Ler do topo
+                # deixava input_tokens = 0 em TODO stream Anthropic, então o
+                # usage_logs e o teto de gasto subcontavam a parcela de input.
+                usage = message.get("usage") or event.get("usage")
                 if isinstance(usage, dict):
                     input_tokens = int(usage.get("input_tokens", input_tokens))
                 yield self._chunk(chunk_id, model, role="assistant")
