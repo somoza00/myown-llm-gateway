@@ -94,8 +94,8 @@ def test_capture_usage_ignores_other_lines() -> None:
 
 ANTHROPIC_SSE = (
     'event: message_start\n'
-    'data: {"type":"message_start","message":{"id":"msg_1","model":"claude-x"},'
-    '"usage":{"input_tokens":4}}\n\n'
+    'data: {"type":"message_start","message":{"id":"msg_1","model":"claude-x",'
+    '"usage":{"input_tokens":4,"output_tokens":1}}}\n\n'
     'event: content_block_delta\n'
     'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}\n\n'
     'event: content_block_delta\n'
