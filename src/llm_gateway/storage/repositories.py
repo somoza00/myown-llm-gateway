@@ -90,17 +90,23 @@ async def create_failed_usage_log(
 
 
 async def list_usage_logs(
-    limit: int, *, status: str | None = None, model: str | None = None
+    limit: int, *, status: str | None = None, model: str | None = None,
+    provider: str | None = None, offset: int = 0,
 ) -> list[UsageLog]:
     """Return the most recent `limit` usage logs (newest first), optionally filtered
-    by exact `status` ('ok'/'error') and/or exact `model`."""
+    by exact `status` ('ok'/'error'), exact `model` and/or exact `provider`
+    (e.g. 'openai', 'cache'). `offset` skips the first N rows (pagination)."""
     stmt = select(UsageLog)
     if status is not None:
         stmt = stmt.where(UsageLog.status == status)
     if model is not None:
         stmt = stmt.where(UsageLog.model == model)
+    if provider is not None:
+        stmt = stmt.where(UsageLog.provider == provider)
     async with async_session_factory() as session:
-        result = await session.execute(stmt.order_by(UsageLog.id.desc()).limit(limit))
+        result = await session.execute(
+            stmt.order_by(UsageLog.id.desc()).limit(limit).offset(offset)
+        )
         return list(result.scalars().all())
 
 
