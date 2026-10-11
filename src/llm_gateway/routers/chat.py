@@ -243,6 +243,7 @@ def _reject_unknown_streaming_model(
 @router.post("/v1/chat/completions", response_model=ChatResponse)
 async def chat_completions(
     body: ChatRequest,
+    response: Response,
     virtual_key_id: int = Depends(enforce_rate_limit),
     _spend_guard: int = Depends(enforce_spend_cap),
 ) -> Response | ChatResponse:
@@ -256,11 +257,18 @@ async def chat_completions(
         _reject_unknown_streaming_model(
             body, get_registry(), virtual_key_id=virtual_key_id, started=started
         )
-        return StreamingResponse(
+        stream = StreamingResponse(
             _stream_response(body, get_registry(), virtual_key_id=virtual_key_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+        # Ao devolver um Response direto (ramo de streaming), o FastAPI NÃO mescla
+        # os headers do `Response` injetado que `enforce_rate_limit` preencheu —
+        # sem isto os X-RateLimit-* não chegavam ao cliente no caminho de
+        # streaming (o modo principal do chat). `setdefault` preserva os nossos.
+        for name, value in response.headers.items():
+            stream.headers.setdefault(name, value)
+        return stream
     try:
         return await handle_chat_completion(body, get_registry(), virtual_key_id=virtual_key_id)
     except NoProviderAvailableError as exc:
