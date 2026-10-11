@@ -544,6 +544,30 @@ async def test_rate_limit_headers_are_exposed(client, registry, redis_stub, api_
     assert resp.headers.get("x-ratelimit-remaining") is not None
 
 
+@respx.mock
+async def test_rate_limit_headers_are_exposed_on_streaming(
+    client, registry, redis_stub, api_key
+) -> None:
+    """O caminho de streaming também carrega X-RateLimit-*.
+
+    O endpoint devolve um StreamingResponse direto, e nesse ramo o FastAPI não
+    mescla os headers do `Response` injetado — sem o merge explícito, o cliente
+    do modo principal (streaming) não via a cota.
+    """
+    respx.post(OPENAI_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, text=OPENAI_STREAM, headers={"Content-Type": "text/event-stream"}
+        )
+    )
+    resp = await client.post(
+        "/v1/chat/completions", headers=AUTH, json={**CHAT_BODY, "stream": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert resp.headers.get("x-ratelimit-limit")
+    assert resp.headers.get("x-ratelimit-remaining") is not None
+
+
 async def test_chat_validation_errors_are_openai_style_400(
     client, registry, redis_stub, api_key
 ) -> None:
