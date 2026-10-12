@@ -568,6 +568,24 @@ async def test_rate_limit_headers_are_exposed_on_streaming(
     assert resp.headers.get("x-ratelimit-remaining") is not None
 
 
+async def test_usage_spend_endpoint(client, api_key) -> None:
+    """GET /api/usage/spend expõe o gasto da chave (0 sem uso) e o teto configurado."""
+    from decimal import Decimal
+
+    resp = await client.get("/api/usage/spend", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["virtual_key_id"] == api_key
+    assert Decimal(body["spend_usd"]) == 0  # sem uso registrado ainda
+    assert "limit_usd" in body and "global_limit_usd" in body
+
+
+async def test_usage_spend_requires_auth(client) -> None:
+    """Sem chave virtual, o endpoint de gasto é 401 (não vaza nada)."""
+    resp = await client.get("/api/usage/spend")
+    assert resp.status_code == 401
+
+
 async def test_chat_validation_errors_are_openai_style_400(
     client, registry, redis_stub, api_key
 ) -> None:
