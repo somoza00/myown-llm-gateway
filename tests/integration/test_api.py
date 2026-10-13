@@ -586,6 +586,24 @@ async def test_usage_spend_requires_auth(client) -> None:
     assert resp.status_code == 401
 
 
+async def test_keys_endpoint_lists_keys_without_hashes(client, api_key) -> None:
+    """GET /api/keys lista as chaves virtuais, sem expor o hash da chave."""
+    resp = await client.get("/api/keys", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    keys = resp.json()["keys"]
+    mine = next(k for k in keys if k["id"] == api_key)
+    assert mine["client_name"] == "test-client"
+    assert mine["is_active"] is True
+    assert "hashed_key" not in mine
+    assert "hash" not in resp.text
+
+
+async def test_keys_endpoint_requires_auth(client) -> None:
+    """Sem chave virtual, a listagem de chaves é 401."""
+    resp = await client.get("/api/keys")
+    assert resp.status_code == 401
+
+
 async def test_chat_validation_errors_are_openai_style_400(
     client, registry, redis_stub, api_key
 ) -> None:
