@@ -324,6 +324,51 @@ async def test_openai_passes_stop_through_unchanged() -> None:
 
 
 @respx.mock
+async def test_openai_passes_seed_and_user_through() -> None:
+    """O adapter OpenAI-compat repassa `seed`/`user` (model_dump)."""
+    route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=OPENAI_BODY))
+    provider = make_openai_provider()
+    request = ChatRequest(
+        model="gpt-4o",
+        messages=[ChatMessage(role="user", content="hi")],
+        seed=7,
+        user="u-1",
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert sent_payload["seed"] == 7
+    assert sent_payload["user"] == "u-1"
+
+
+@respx.mock
+async def test_anthropic_omits_seed_and_user() -> None:
+    """Anthropic não define seed/user — o adapter manual não deve inventá-los."""
+    route = respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_su",
+                "model": "claude-3-5-sonnet-latest",
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    provider = make_anthropic_provider()
+    request = ChatRequest(
+        model="claude-3-5-sonnet-latest",
+        messages=[ChatMessage(role="user", content="hi")],
+        seed=7,
+        user="u-1",
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert "seed" not in sent_payload
+    assert "user" not in sent_payload
+
+
+@respx.mock
 async def test_mistral_openai_compatible_passthrough() -> None:
     respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=OPENAI_BODY))
     provider = make_mistral_provider()
