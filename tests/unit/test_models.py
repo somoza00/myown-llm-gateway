@@ -82,3 +82,12 @@ def test_rejects_blank_stop_sequence() -> None:
 def test_rejects_more_than_four_stop_sequences() -> None:
     with pytest.raises(ValidationError):
         ChatRequest(model="m", messages=_messages(1), stop=["a", "b", "c", "d", "e"])
+
+
+def test_accepts_seed_and_user() -> None:
+    ChatRequest(model="m", messages=_messages(1), seed=42, user="user-123")
+
+
+def test_rejects_oversized_user_field() -> None:
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=_messages(1), user="x" * 256)

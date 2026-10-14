@@ -33,6 +33,13 @@ class ChatRequest(BaseModel):
     # that name the field differently (Anthropic: `stop_sequences`) translate it
     # in their adapter; the OpenAI-compatible ones pass it straight through.
     stop: str | list[str] | None = Field(default=None)
+    # OpenAI `seed`: reproducible sampling. Providers that support it (OpenAI,
+    # Groq, DeepSeek, …) pass it through via model_dump; Anthropic doesn't define
+    # it, so its manual adapter intentionally omits it. Also part of the cache key
+    # (same prompt with a different seed must not reuse a cached response).
+    seed: int | None = Field(default=None)
+    # OpenAI `user`: end-user identifier for abuse tracking/rate limits.
+    user: str | None = Field(default=None, max_length=255)
     stream: bool = False
 
     @field_validator("stop")
