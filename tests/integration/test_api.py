@@ -637,3 +637,51 @@ async def test_models_unknown_404_uses_model_not_found_type(
     error = resp.json()["error"]
     assert error["message"] == "model 'no-such-model' not found"
     assert error["type"] == "model_not_found"
+
+
+# --- Admin de chaves via HTTP (criar/revogar) ---
+
+
+async def test_create_key_returns_raw_key_once_and_lists_it(client, api_key) -> None:
+    """POST /api/keys devolve a chave crua; o GET nunca expõe hash nem a chave."""
+    resp = await client.post(
+        "/api/keys",
+        headers=AUTH,
+        json={"client_name": "dashboard", "expires_in_days": 7, "spend_limit_usd": 5},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["api_key"].startswith("sk-")
+    assert body["client_name"] == "dashboard"
+    assert float(body["spend_limit_usd"]) == 5
+    assert body["expires_at"] is not None
+
+    keys = (await client.get("/api/keys", headers=AUTH)).json()["keys"]
+    created = next(k for k in keys if k["id"] == body["id"])
+    assert created["is_active"] is True
+    assert "hashed_key" not in created
+    assert "api_key" not in created
+
+
+async def test_create_key_rejects_blank_client_name(client, api_key) -> None:
+    """Nome só-espaços é o rótulo da auditoria — rejeita (400, padrão OpenAI-style)."""
+    resp = await client.post("/api/keys", headers=AUTH, json={"client_name": "   "})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "invalid_request_error"
+
+
+async def test_revoke_key_deactivates_and_404s_when_unknown(client, api_key) -> None:
+    created = (
+        await client.post("/api/keys", headers=AUTH, json={"client_name": "temp"})
+    ).json()
+    assert (await client.delete(f"/api/keys/{created['id']}", headers=AUTH)).status_code == 204
+
+    keys = (await client.get("/api/keys", headers=AUTH)).json()["keys"]
+    assert next(k for k in keys if k["id"] == created["id"])["is_active"] is False
+
+    assert (await client.delete("/api/keys/999999", headers=AUTH)).status_code == 404
+
+
+async def test_key_admin_requires_auth(client) -> None:
+    assert (await client.post("/api/keys", json={"client_name": "x"})).status_code == 401
+    assert (await client.delete("/api/keys/1")).status_code == 401
