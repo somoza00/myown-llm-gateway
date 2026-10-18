@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from llm_gateway.routers.chat import authenticate_request
-from llm_gateway.storage.repositories import list_usage_logs
+from llm_gateway.storage.repositories import count_usage_logs, list_usage_logs
 
 router = APIRouter(prefix="/api", tags=["logs"])
 
@@ -26,14 +26,17 @@ async def list_logs(
     """Retorna os logs recentes de requisições (uso + falhas), do mais novo pro mais antigo.
 
     Requer autenticação por chave virtual. Filtros opcionais `status`, `model` e
-    `provider` permitem ao dashboard estreitar a lista; `offset` pagina.
-    Campos usados pela UI: timestamp, model, provider, tokens, latency_ms,
-    status, error_type.
+    `provider` permitem ao dashboard estreitar a lista; `offset` pagina. `total` é
+    o tamanho do conjunto FILTRADO (ignora limit/offset), para a UI saber quando
+    parar de paginar. Campos usados pela UI: timestamp, model, provider, tokens,
+    latency_ms, status, error_type.
     """
     logs = await list_usage_logs(
         limit, status=status, model=model, provider=provider, offset=offset
     )
+    total = await count_usage_logs(status=status, model=model, provider=provider)
     return {
+        "total": total,
         "logs": [
             {
                 "id": log.id,

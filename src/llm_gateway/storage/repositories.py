@@ -110,6 +110,26 @@ async def list_usage_logs(
         return list(result.scalars().all())
 
 
+async def count_usage_logs(
+    *, status: str | None = None, model: str | None = None, provider: str | None = None
+) -> int:
+    """Count the usage logs matching the same filters as `list_usage_logs`.
+
+    `limit`/`offset` are deliberately NOT applied: the count is the size of the
+    filtered result set, so the dashboard can page without guessing when to stop.
+    """
+    stmt = select(func.count()).select_from(UsageLog)
+    if status is not None:
+        stmt = stmt.where(UsageLog.status == status)
+    if model is not None:
+        stmt = stmt.where(UsageLog.model == model)
+    if provider is not None:
+        stmt = stmt.where(UsageLog.provider == provider)
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        return int(result.scalar_one())
+
+
 async def list_keys() -> list[ApiKey]:
     """Return every API key, oldest first."""
     async with async_session_factory() as session:
