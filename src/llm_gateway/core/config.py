@@ -7,6 +7,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +59,20 @@ class Settings(BaseSettings):
     # unbounded provider default. Protects against a single request generating
     # an unexpectedly large (expensive) completion.
     MAX_TOKENS_PER_REQUEST: int = 4096
+
+    @field_validator("GLOBAL_SPEND_LIMIT_USD", mode="before")
+    @classmethod
+    def _blank_spend_limit_means_unset(cls, value: object) -> object:
+        """Empty `GLOBAL_SPEND_LIMIT_USD=` (as shipped in `.env.example`) means "no cap".
+
+        Without this, the documented setup (copy `.env.example` to `.env`) fed an
+        empty string into a `float | None` field and pydantic aborted with
+        "unable to parse string as a number" — the gateway did not even start,
+        and the error pointed at the env var instead of the intended default.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 @lru_cache
