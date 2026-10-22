@@ -28,7 +28,11 @@ services:
     container_name: llm_gateway_redis
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      # Só loopback: este Redis NÃO tem senha. Publicado em 0.0.0.0 ele ficava
+      # alcançável por qualquer máquina da rede local (o host é um laptop, que
+      # troca de WiFi) — vetor clássico de cryptominer/ransomware em Redis
+      # aberto. 127.0.0.1 mantém o uso local (`redis-cli -p 6379`) intacto.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -48,7 +52,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gateway}
       POSTGRES_DB: ${POSTGRES_DB:-llm_gateway}
     ports:
-      - "5433:5432"
+      # 127.0.0.1 pelo mesmo motivo do Redis: Postgres com usuário/senha de dev
+      # (gateway/gateway) não deve ficar exposto na LAN. Ferramentas locais
+      # (psql, DBeaver) continuam funcionando em localhost:5433.
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

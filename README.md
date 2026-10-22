@@ -53,7 +53,10 @@ migration step.
 
 PostgreSQL is exposed on the **host** at port `5433` (mapped to `5432` inside the
 network) to avoid conflicts with a local Postgres; the gateway itself talks to
-`postgres:5432` over the compose network.
+`postgres:5432` over the compose network. Postgres and Redis are published on
+**`127.0.0.1` only** — neither has a password, so they must not be reachable
+from other machines on the LAN. Local tools keep working: `psql` on
+`localhost:5433`, `redis-cli -p 6379`.
 
 Wait until the health check passes, then verify:
 
