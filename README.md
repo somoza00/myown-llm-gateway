@@ -229,7 +229,7 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-> **Atalhos (Makefile):** o repo tem um `Makefile` que espelha o CI — `make install` (cria o `.venv` e instala as dev deps), `make config` (valida o compose), `make lint` (ruff), `make typecheck` (mypy), `make test` (ruff + mypy + pytest) e `make up`/`make down`.
+> **Atalhos (Makefile):** o repo tem um `Makefile` que espelha o CI — `make install` (cria o `.venv` e instala as dev deps), `make config` (valida o compose), `make lint` (ruff), `make typecheck` (mypy), `make test` (ruff + mypy + pytest), `make migrate-smoke` (aplica e desfaz as migrations Alembic num SQLite descartável, como o CI) e `make audit` (varredura de CVE com pip-audit), além de `make up`/`make down`.
 
 ## 6. Project layout
 
