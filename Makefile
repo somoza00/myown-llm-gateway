@@ -1,6 +1,6 @@
 # Atalhos de desenvolvimento espelhando o CI (.github/workflows/ci.yml).
-# Uso: make config | make lint | make test | make up ...
-.PHONY: config up down install lint typecheck test migrate-smoke audit
+# Uso: make config | make lint | make test | make ci | make up ...
+.PHONY: config up down install lint typecheck test ci migrate-smoke audit
 
 config: ## Valida o docker-compose (sem subir nada)
 	docker compose config -q
@@ -20,8 +20,15 @@ lint: ## Lint (ruff)
 typecheck: ## Type check (mypy)
 	.venv/bin/mypy src/llm_gateway
 
-test: ## Gate completo do CI: ruff + mypy + pytest
+test: ## Gate rapido local: ruff + mypy + pytest
 	.venv/bin/ruff check . && .venv/bin/mypy src/llm_gateway && .venv/bin/pytest
+
+# O `make test` acima NAO e o CI inteiro: o job `test` do ci.yml roda tambem
+# pip-audit e o smoke das migrations. Um CVE novo nas deps ou uma migration
+# quebrada passavam pelo gate local e so apareciam depois do push (e o PR ja
+# estava aberto). Este alvo encadeia a sequencia exata do CI, na mesma ordem.
+ci: lint typecheck audit migrate-smoke ## Sequencia completa do job `test` do CI (lint + types + audit + migrate-smoke + pytest)
+	.venv/bin/pytest
 
 # Mesmo passo do job `test` no CI: um ALTER/DROP que só quebra no downgrade não
 # aparecia em nenhum gate local (o pytest cria o schema com create_all, não com
