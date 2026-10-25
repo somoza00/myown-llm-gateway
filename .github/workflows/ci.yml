@@ -43,6 +43,23 @@ jobs:
           alembic upgrade head
           alembic downgrade base
 
+  docker-build:
+    # A imagem só era construída no job `publish`, que roda em tags `v*`: um
+    # Dockerfile quebrado (COPY de arquivo renomeado, `npm ci` com lock
+    # dessincronizado do package.json do frontend, dependência faltando no
+    # pyproject) passava por lint/types/testes e só era descoberto na hora de
+    # publicar a release — com a tag já criada. Construir a cada push/PR fecha
+    # esse buraco no mesmo lugar onde os outros erros de build aparecem.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image (sem push)
+        run: docker build -t llm-gateway:ci .
+
   publish:
     name: Publish Docker image to GHCR
     needs: test
