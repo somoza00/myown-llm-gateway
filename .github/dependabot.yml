@@ -7,6 +7,17 @@ updates:
     schedule:
       interval: "weekly"
 
+  # A UI (frontend/) é compilada DENTRO da imagem do gateway (stage
+  # `ui-builder` do Dockerfile roda `npm ci`), mas não tinha entrada de
+  # Dependabot: package.json/package-lock.json do frontend ficavam fora de
+  # qualquer atualização automática — inclusive de alerta de CVE de
+  # dependência npm (react/vite). O ecossistema `docker` abaixo não cobre
+  # isso: ele olha só o Dockerfile, não o manifesto npm.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
