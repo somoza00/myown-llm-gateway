@@ -6,6 +6,18 @@ on:
     tags: ["v*"]
   pull_request:
 
+# Least privilege: os jobs daqui só leem o repositório (checkout + lint/types/
+# testes/audit/build) e publicam uma imagem no GHCR no `publish`. Sem este
+# bloco o GITHUB_TOKEN herda o default da organização, que pode ser
+# leitura/escrita em contents: um passo comprometido (action de terceiro,
+# `npm ci` com postinstall malicioso no stage `ui-builder` do Dockerfile) teria
+# permissão de commitar/pushar direto na main. O `publish` declara as próprias
+# permissões abaixo (contents: read + packages: write) e não é afetado por
+# este bloco. Mesmo padrão já usado no CI do study-memory-agent e do
+# evaluation-framework.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
