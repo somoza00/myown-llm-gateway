@@ -40,6 +40,25 @@ def build_cache_key(
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _parse_entry(raw: str, *, record_event: bool = True) -> ChatResponse | None:
+    """Deserializa uma entrada do cache; `None` se ela não casar com o schema atual.
+
+    O payload pode estar ilegível por motivo fora do nosso controle (valor
+    truncado no Redis, escrita por uma versão anterior do gateway com outro
+    schema, ou update de deploy). Antes a `ValidationError` subia e TODA
+    requisição que caísse naquela cache key virava 500 até o TTL expirar —
+    uma entrada podre derrubava um endpoint que deveria apenas "errar para o
+    caminho lento".
+    """
+    try:
+        return ChatResponse.model_validate_json(raw)
+    except ValueError:
+        # Inclui pydantic.ValidationError e json inválido (herdam de ValueError).
+        if record_event:
+            record_cache_event("error")
+        return None
+
+
 async def get(key: str) -> ChatResponse | None:
     """Return the cached response for `key`, or None on miss or Redis failure."""
     try:
@@ -50,8 +69,23 @@ async def get(key: str) -> ChatResponse | None:
     if raw is None:
         record_cache_event("miss")
         return None
+    cached = _parse_entry(raw)
+    if cached is None:
+        # Entrada envenenada (JSON truncado ou schema de uma versão anterior):
+        # descarta para a próxima requisição poder regravar em vez de bater
+        # sempre na mesma entrada inválida.
+        await _discard_entry(key)
+        return None
     record_cache_event("hit")
-    return ChatResponse.model_validate_json(raw)
+    return cached
+
+
+async def _discard_entry(key: str) -> None:
+    """Apaga uma entrada ilegível do cache; falhas de Redis são ignoradas."""
+    try:
+        await redis_client.delete(key)
+    except RedisError:
+        pass
 
 
 async def set(key: str, value: ChatResponse) -> None:
@@ -114,6 +148,8 @@ async def wait_for_result(
         except RedisError:
             return None
         if raw is not None:
-            return ChatResponse.model_validate_json(raw)
+            # Entrada ilegível conta como "ainda não há resultado": não é uma
+            # leitura de cache real, então não mexe nas métricas hit/miss.
+            return _parse_entry(raw, record_event=False)
         await asyncio.sleep(_LOCK_POLL_INTERVAL_SECONDS)
     return None
