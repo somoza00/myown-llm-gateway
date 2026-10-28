@@ -160,3 +160,20 @@ async def test_wait_for_result_ignores_corrupt_entry(redis_stub) -> None:
     """Single-flight cross-réplica: entrada ilegível não derruba o esperador."""
     await redis_stub.set("bad-wait", "[]")
     assert await cache.wait_for_result("bad-wait", timeout_s=0.2) is None
+
+
+async def test_bytes_entry_is_parsed_and_non_utf8_is_a_miss(redis_stub) -> None:
+    """O cliente Redis devolve `bytes` por padrão: decodifica; lixo binário é miss.
+
+    Regressão do CI: `_parse_entry` só aceitava `str` (erro de tipo no mypy do
+    runner) e bytes não-UTF-8 precisam virar miss, não exceção.
+    """
+    valid = make_response().model_dump_json().encode("utf-8")
+    redis_stub.store["bytes-ok"] = valid  # type: ignore[assignment]
+    cached = await cache.get("bytes-ok")
+    assert cached is not None
+    assert cached.choices[0].message.content == "ok"
+
+    redis_stub.store["bytes-bad"] = b"\xff\xfe\x00"  # type: ignore[assignment]
+    assert await cache.get("bytes-bad") is None
+    assert "bytes-bad" not in redis_stub.store
