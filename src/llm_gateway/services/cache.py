@@ -40,7 +40,7 @@ def build_cache_key(
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _parse_entry(raw: str, *, record_event: bool = True) -> ChatResponse | None:
+def _parse_entry(raw: str | bytes, *, record_event: bool = True) -> ChatResponse | None:
     """Deserializa uma entrada do cache; `None` se ela não casar com o schema atual.
 
     O payload pode estar ilegível por motivo fora do nosso controle (valor
@@ -49,11 +49,16 @@ def _parse_entry(raw: str, *, record_event: bool = True) -> ChatResponse | None:
     requisição que caísse naquela cache key virava 500 até o TTL expirar —
     uma entrada podre derrubava um endpoint que deveria apenas "errar para o
     caminho lento".
+
+    Aceita `bytes` porque é o que o cliente Redis devolve por padrão
+    (`decode_responses=False`); `UnicodeDecodeError` também é `ValueError`.
     """
     try:
-        return ChatResponse.model_validate_json(raw)
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        return ChatResponse.model_validate_json(text)
     except ValueError:
-        # Inclui pydantic.ValidationError e json inválido (herdam de ValueError).
+        # Inclui pydantic.ValidationError, json inválido e bytes não-UTF-8
+        # (todos herdam de ValueError).
         if record_event:
             record_cache_event("error")
         return None
