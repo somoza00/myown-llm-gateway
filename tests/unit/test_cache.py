@@ -120,3 +120,43 @@ async def test_wait_for_result_returns_cached(redis_stub) -> None:
 
 async def test_wait_for_result_times_out_when_empty(redis_stub) -> None:
     assert await cache.wait_for_result("empty", timeout_s=0.1) is None
+
+
+async def test_corrupt_entry_is_a_miss_not_a_crash(redis_stub) -> None:
+    """Entrada ilegível no Redis vira MISS (e é descartada), nunca 500.
+
+    Regressão: `ChatResponse.model_validate_json` subia cru — um valor truncado
+    no Redis (ou escrito por uma versão anterior do gateway) fazia TODA
+    requisição que caísse naquela cache key responder 500 até o TTL expirar.
+    """
+    import json
+
+    await redis_stub.set("bad-json", "{isso nao e json")
+    assert await cache.get("bad-json") is None
+    assert "bad-json" not in redis_stub.store  # entrada podre foi descartada
+
+    # Payload válido como JSON mas de um schema antigo (sem choices/usage).
+    old_schema = json.dumps({"id": "msg-1", "created": 1, "model": "m"})
+    await redis_stub.set("old-schema", old_schema)
+    assert await cache.get("old-schema") is None
+    assert "old-schema" not in redis_stub.store
+
+
+async def test_corrupt_entry_counts_as_cache_error(redis_stub) -> None:
+    """A entrada podre é contabilizada como evento 'error' (não como miss)."""
+    from llm_gateway.services import prometheus_metrics as pm
+
+    def val(result: str) -> float:
+        return pm.CACHE_EVENTS.labels(result=result)._value.get()
+
+    await redis_stub.set("bad-3", "null")
+    err0, miss0 = val("error"), val("miss")
+    assert await cache.get("bad-3") is None
+    assert val("error") == err0 + 1
+    assert val("miss") == miss0  # não mascara a entrada podre como miss normal
+
+
+async def test_wait_for_result_ignores_corrupt_entry(redis_stub) -> None:
+    """Single-flight cross-réplica: entrada ilegível não derruba o esperador."""
+    await redis_stub.set("bad-wait", "[]")
+    assert await cache.wait_for_result("bad-wait", timeout_s=0.2) is None
