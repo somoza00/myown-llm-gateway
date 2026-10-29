@@ -87,6 +87,24 @@ class Usage(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
 
+    @field_validator("prompt_tokens", "completion_tokens", "total_tokens", mode="before")
+    @classmethod
+    def _never_negative(cls, value: object) -> object:
+        """Contagem negativa do upstream vira 0.
+
+        O `usage` destas respostas é copiado do JSON do provedor (ou do
+        acumulador de streaming) e alimenta `estimated_cost` em
+        `services/metrics.py`, que é o que o spend cap soma. Um provedor
+        bugado/malicioso que devolvesse `prompt_tokens: -100000` produzia custo
+        NEGATIVO no `usage_logs` — ou seja, *abatia* o gasto acumulado e
+        enfraquecia tanto o teto por chave quanto o global (`GLOBAL_SPEND_LIMIT_USD`).
+        Token não pode ser negativo; clampar na borda é mais seguro que confiar
+        no formato do upstream (e não rejeita a resposta, que já foi paga).
+        """
+        if isinstance(value, int) and not isinstance(value, bool) and value < 0:
+            return 0
+        return value
+
 
 class ChatResponse(BaseModel):
     """OpenAI-compatible chat completion response body."""

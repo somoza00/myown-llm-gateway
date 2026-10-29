@@ -78,3 +78,22 @@ def test_asymmetric_pricing_matters_for_output_heavy_responses() -> None:
     assert record.estimated_cost != blended_rate_estimate
     # 100/1e6 * 2.50 + 900/1e6 * 10.00 = 0.00025 + 0.009 = 0.00925
     assert record.estimated_cost == Decimal("0.00925")
+
+
+def test_negative_upstream_tokens_never_produce_negative_cost() -> None:
+    """Custo negativo abateria o gasto acumulado e furava o spend cap."""
+    pricing = ModelPricing(input_cost_per_1m=2.50, output_cost_per_1m=10.00)
+    usage = Usage(prompt_tokens=-1_000_000, completion_tokens=-1_000_000, total_tokens=-2_000_000)
+
+    record = build_usage_record(
+        virtual_key_id=1,
+        provider_name="openai",
+        pricing=pricing,
+        model="gpt-4o",
+        usage=usage,
+        latency_ms=10,
+    )
+
+    assert record.input_tokens == 0
+    assert record.output_tokens == 0
+    assert record.estimated_cost == Decimal("0")
