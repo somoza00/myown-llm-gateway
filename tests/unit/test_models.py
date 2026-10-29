@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from llm_gateway.models.api import ChatRequest
+from llm_gateway.models.api import ChatRequest, ChatResponse, Usage
 
 
 def _messages(n: int) -> list[dict[str, str]]:
@@ -91,3 +91,27 @@ def test_accepts_seed_and_user() -> None:
 def test_rejects_oversized_user_field() -> None:
     with pytest.raises(ValidationError):
         ChatRequest(model="m", messages=_messages(1), user="x" * 256)
+
+
+def test_usage_clamps_negative_token_counts_to_zero() -> None:
+    """Token negativo do upstream não pode virar custo negativo (bypass do spend cap)."""
+    usage = Usage(prompt_tokens=-100_000, completion_tokens=-5, total_tokens=-100_005)
+    assert usage.prompt_tokens == 0
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 0
+
+
+def test_usage_from_upstream_payload_clamps_negatives_but_keeps_positives() -> None:
+    """O caminho real é `ChatResponse.model_validate(json do provedor)`."""
+    response = ChatResponse.model_validate(
+        {
+            "id": "x",
+            "created": 0,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": -10, "completion_tokens": 7, "total_tokens": -3},
+        }
+    )
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.completion_tokens == 7
+    assert response.usage.total_tokens == 0
