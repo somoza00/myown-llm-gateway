@@ -72,6 +72,22 @@ jobs:
       - name: Build image (sem push)
         run: docker build -t llm-gateway:ci .
 
+      - name: Scan image (Trivy)
+        # A imagem agora é construída a cada push/PR, mas nunca era varrida: uma
+        # CVE CRITICAL/HIGH na base (python-slim, node-alpine do stage da UI) ou
+        # numa wheel do `pip install .` só aparecia se alguém rodasse um scanner
+        # na mão — o mesmo buraco que o job `docker-build` do
+        # evaluation-framework já cobre com Trivy. Informativo por enquanto
+        # (exit-code 0): CVE de imagem base frequentemente não tem fix imediato
+        # e bloquear todo PR por isso impede trabalho legítimo; dar visibilidade
+        # no run é o passo que falta. Promover para exit-code 1 quando o time
+        # decidir gatear. Ação pinada por SHA (mesma versão usada no eval).
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: llm-gateway:ci
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
   publish:
     name: Publish Docker image to GHCR
     needs: test
