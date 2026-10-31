@@ -115,3 +115,38 @@ def test_usage_from_upstream_payload_clamps_negatives_but_keeps_positives() -> N
     assert response.usage.prompt_tokens == 0
     assert response.usage.completion_tokens == 7
     assert response.usage.total_tokens == 0
+
+
+def test_accepts_response_format_json_object() -> None:
+    """JSON mode: `{"type": "json_object"}` é aceito como está."""
+    request = ChatRequest(
+        model="m", messages=_messages(1), response_format={"type": "json_object"}
+    )
+    assert request.response_format == {"type": "json_object"}
+
+
+def test_accepts_response_format_json_schema() -> None:
+    """`json_schema` com o objeto de schema é aceito (structured outputs)."""
+    schema = {"name": "resposta", "schema": {"type": "object"}}
+    request = ChatRequest(
+        model="m",
+        messages=_messages(1),
+        response_format={"type": "json_schema", "json_schema": schema},
+    )
+    assert request.response_format is not None
+    assert request.response_format["json_schema"] == schema
+
+
+def test_response_format_is_optional() -> None:
+    assert ChatRequest(model="m", messages=_messages(1)).response_format is None
+
+
+def test_rejects_unknown_response_format_type() -> None:
+    """Tipo desconhecido é rejeitado na borda (422), não no upstream (400)."""
+    with pytest.raises(ValidationError, match="response_format.type"):
+        ChatRequest(model="m", messages=_messages(1), response_format={"type": "xml"})
+
+
+def test_rejects_json_schema_without_schema_object() -> None:
+    with pytest.raises(ValidationError, match="exige o objeto 'json_schema'"):
+        ChatRequest(model="m", messages=_messages(1), response_format={"type": "json_schema"})

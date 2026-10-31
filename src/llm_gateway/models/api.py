@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Role = Literal["system", "user", "assistant"]
 FinishReason = Literal["stop", "length", "content_filter"]
+_RESPONSE_FORMAT_TYPES = frozenset({"text", "json_object", "json_schema"})
 
 
 class ChatMessage(BaseModel):
@@ -40,7 +41,39 @@ class ChatRequest(BaseModel):
     seed: int | None = Field(default=None)
     # OpenAI `user`: end-user identifier for abuse tracking/rate limits.
     user: str | None = Field(default=None, max_length=255)
+    # OpenAI `response_format` (JSON mode): `{"type": "json_object"}` faz o
+    # provedor devolver JSON válido; `{"type": "json_schema", "json_schema":
+    # {...}}` fixa o schema. Vai como está no corpo dos adapters
+    # OpenAI-compatíveis (o payload é o `model_dump`) e entra na cache key —
+    # o mesmo prompt em modo texto e em modo JSON não podem compartilhar
+    # resposta cacheada. O adapter da Anthropic não define o campo e o omite
+    # (mesmo tratamento dado a `seed`).
+    response_format: dict[str, Any] | None = None
     stream: bool = False
+
+    @field_validator("response_format")
+    @classmethod
+    def _valid_response_format(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Rejeita um `response_format` que o provedor recusaria (400/422 na borda).
+
+        Um `type` desconhecido ou um `json_schema` sem o objeto de schema viram
+        erro no upstream depois de a requisição já ter consumido cota de
+        rate-limit — falhar aqui mantém o erro onde ele é acionável.
+        """
+        if value is None:
+            return value
+        kind = value.get("type")
+        if kind not in _RESPONSE_FORMAT_TYPES:
+            raise ValueError(
+                "response_format.type deve ser 'text', 'json_object' ou 'json_schema'"
+            )
+        if kind == "json_schema" and not isinstance(value.get("json_schema"), dict):
+            raise ValueError(
+                "response_format do tipo 'json_schema' exige o objeto 'json_schema'"
+            )
+        return value
 
     @field_validator("stop")
     @classmethod

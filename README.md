@@ -211,11 +211,19 @@ Model names depend on which providers you configured: `gpt-4o` / `gpt-4o-mini`
 `deepseek-chat` / `deepseek-reasoner` (DeepSeek), `llama3.2` (Ollama, or
 whatever you've pulled locally — only `llama3.2` is pre-registered).
 
-**Supported request fields:** `model`, `messages`, `temperature`, `max_tokens`,
-`stream`. This is a subset of the OpenAI Chat Completions API — there is no
-support (yet) for tool/function calling, `n` (multiple choices), `stop`,
-`response_format`, `seed`, or multimodal content. A client built against the
-full OpenAI API may need to drop unsupported fields before calling this gateway.
+**Supported request fields:** `model`, `messages`, `temperature`, `top_p`,
+`frequency_penalty`, `presence_penalty`, `max_tokens`, `stop`, `seed`,
+`user`, `response_format` (JSON mode: `{"type": "json_object"}` or
+`{"type": "json_schema", "json_schema": {...}}`) and `stream`. This is a subset
+of the OpenAI Chat Completions API — there is no support (yet) for tool/function
+calling, `n` (multiple choices), or multimodal content. A client built against
+the full OpenAI API may need to drop unsupported fields before calling this
+gateway.
+
+`response_format` is forwarded as-is by the OpenAI-compatible adapters (OpenAI,
+Groq, Gemini, DeepSeek, Mistral, Ollama) and enters the cache key, so a prompt
+asked in JSON mode never gets served from a cached plain-text answer. The
+Anthropic adapter has no equivalent field and omits it (like `seed`).
 
 ## 5. Run the tests
 
