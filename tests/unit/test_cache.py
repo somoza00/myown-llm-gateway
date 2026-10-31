@@ -177,3 +177,24 @@ async def test_bytes_entry_is_parsed_and_non_utf8_is_a_miss(redis_stub) -> None:
     redis_stub.store["bytes-bad"] = b"\xff\xfe\x00"  # type: ignore[assignment]
     assert await cache.get("bytes-bad") is None
     assert "bytes-bad" not in redis_stub.store
+
+
+async def test_response_format_is_part_of_the_cache_key() -> None:
+    """JSON mode e texto puro não podem compartilhar a mesma resposta cacheada."""
+    plain = ChatRequest(model="m", messages=[{"role": "user", "content": "hi"}])
+    json_mode = ChatRequest(
+        model="m", messages=[{"role": "user", "content": "hi"}],
+        response_format={"type": "json_object"},
+    )
+    text_mode = ChatRequest(
+        model="m", messages=[{"role": "user", "content": "hi"}],
+        response_format={"type": "text"},
+    )
+    assert cache.build_cache_key(plain) != cache.build_cache_key(json_mode)
+    assert cache.build_cache_key(json_mode) != cache.build_cache_key(text_mode)
+    assert cache.build_cache_key(json_mode) == cache.build_cache_key(
+        ChatRequest(
+            model="m", messages=[{"role": "user", "content": "hi"}],
+            response_format={"type": "json_object"},
+        )
+    )

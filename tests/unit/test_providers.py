@@ -388,3 +388,68 @@ async def test_mistral_rate_limited_maps_to_provider_rate_limited_error() -> Non
     )
     with pytest.raises(ProviderRateLimitedError):
         await provider.chat_completion(request)
+
+
+@respx.mock
+async def test_openai_passes_response_format_through() -> None:
+    """O adapter OpenAI-compat repassa `response_format` (JSON mode) sem tocar."""
+    route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=OPENAI_BODY))
+    provider = make_openai_provider()
+    request = ChatRequest(
+        model="gpt-4o",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format={"type": "json_object"},
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert sent_payload["response_format"] == {"type": "json_object"}
+
+
+@respx.mock
+async def test_openai_stream_passes_response_format_through() -> None:
+    """No streaming o `response_format` também vai no corpo enviado ao provedor."""
+    sse = (
+        'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-4o",'
+        '"choices":[{"index":0,"delta":{"content":"{"},"finish_reason":null}]}\n\n'
+    )
+    route = respx.post(OPENAI_URL).mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    provider = make_openai_provider()
+    request = ChatRequest(
+        model="gpt-4o",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format={"type": "json_object"},
+        stream=True,
+    )
+    async for _line in provider.stream_chat_completion(request):
+        break
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert sent_payload["response_format"] == {"type": "json_object"}
+    assert sent_payload["stream"] is True
+
+
+@respx.mock
+async def test_anthropic_omits_response_format() -> None:
+    """Anthropic não tem `response_format`: o adapter manual não inventa o campo."""
+    route = respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_rf",
+                "model": "claude-3-5-sonnet-latest",
+                "content": [{"type": "text", "text": "{}"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "stop_reason": "end_turn",
+            },
+        )
+    )
+    provider = make_anthropic_provider()
+    request = ChatRequest(
+        model="claude-3-5-sonnet-latest",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format={"type": "json_object"},
+    )
+    await provider.chat_completion(request)
+    sent_payload = json.loads(route.calls[0].request.content)
+    assert "response_format" not in sent_payload
