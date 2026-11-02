@@ -1,6 +1,6 @@
 # Atalhos de desenvolvimento espelhando o CI (.github/workflows/ci.yml).
 # Uso: make config | make lint | make test | make ci | make up ...
-.PHONY: config up down install lint typecheck test ci migrate-smoke audit
+.PHONY: config up down install lint typecheck test ci migrate-smoke migrate-smoke-pg audit
 
 config: ## Valida o docker-compose (sem subir nada)
 	docker compose config -q
@@ -41,3 +41,18 @@ migrate-smoke: ## Smoke das migrações (upgrade head + downgrade base em SQLite
 
 audit: ## Varredura de CVE nas dependencias (exige pip-audit no .venv)
 	.venv/bin/pip-audit --skip-editable
+
+# Espelha o job `migrations` do CI: aplica e desfaz TODAS as migrations num
+# Postgres de verdade. O `migrate-smoke` acima usa SQLite, que aceita DDL que o
+# Postgres recusa — um erro só de dialeto passava por todo o gate local e
+# quebrava o `docker compose up` (o entrypoint roda `alembic upgrade head`).
+# Usa um database descartável no Postgres do compose (o `llm_gateway` de dev
+# não é tocado), então exige `docker compose up -d postgres` antes.
+MIGSMOKE_DB ?= gateway_migsmoke
+MIGSMOKE_URL ?= postgresql+asyncpg://gateway:gateway@127.0.0.1:5433/$(MIGSMOKE_DB)
+
+migrate-smoke-pg: ## Migrations upgrade/downgrade num Postgres descartável (espelha o job migrations do CI)
+	docker compose exec -T postgres psql -U gateway -d llm_gateway -c "DROP DATABASE IF EXISTS $(MIGSMOKE_DB);"
+	docker compose exec -T postgres psql -U gateway -d llm_gateway -c "CREATE DATABASE $(MIGSMOKE_DB);"
+	DATABASE_URL="$(MIGSMOKE_URL)" .venv/bin/alembic upgrade head
+	DATABASE_URL="$(MIGSMOKE_URL)" .venv/bin/alembic downgrade base

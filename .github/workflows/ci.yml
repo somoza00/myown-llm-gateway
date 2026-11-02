@@ -55,6 +55,49 @@ jobs:
           alembic upgrade head
           alembic downgrade base
 
+  migrations:
+    # O smoke de migrations do job `test` roda em SQLite, mas o compose e a
+    # produção usam Postgres. Um DDL que o SQLite aceita e o Postgres recusa
+    # (tipo/índice/constraint específico de dialeto) passava por ruff, mypy,
+    # pytest e pelo smoke em SQLite, e só aparecia no `docker compose up` ou no
+    # deploy — com o entrypoint (`alembic upgrade head`) falhando e o gateway
+    # fora do ar. Aqui as migrations sobem E descem contra um Postgres real,
+    # como o job `migrations` do evaluation-framework já faz.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gateway
+          POSTGRES_PASSWORD: gateway
+          POSTGRES_DB: llm_gateway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://gateway:gateway@localhost:5432/llm_gateway
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Upgrade to head (Postgres)
+        run: alembic upgrade head
+
+      - name: Downgrade to base (Postgres)
+        run: alembic downgrade base
+
   docker-build:
     # A imagem só era construída no job `publish`, que roda em tags `v*`: um
     # Dockerfile quebrado (COPY de arquivo renomeado, `npm ci` com lock
