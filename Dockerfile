@@ -1,5 +1,13 @@
 # UI / Logs dashboard — build dentro da própria imagem.
-FROM node:26-alpine AS ui-builder
+#
+# Imagens-base pinadas por DIGEST do índice multi-arch (não por tag): uma tag
+# como `node:26-alpine` é mutável e pode apontar para outra imagem amanhã (repush
+# do mantenedor ou tag trocada no registry), entrando no build sem nenhum diff
+# no repositório. Com o digest, a mesma revisão do Dockerfile constrói sempre a
+# mesma base — o padrão que o evaluation-framework já usa. O Dependabot mantém
+# isso atualizado (ecossistema `docker` em .github/dependabot.yml): os bumps
+# chegam como PR com o digest novo, e o job `docker-build` do CI valida o build.
+FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS ui-builder
 WORKDIR /ui
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -7,7 +15,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- runtime ----
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
