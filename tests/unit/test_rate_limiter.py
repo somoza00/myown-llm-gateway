@@ -63,11 +63,18 @@ class FakePipeline:
 class FakeRedis:
     """In-memory stand-in for the parts of the Redis client the limiter uses."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, zrem_error: bool = False) -> None:
         self.sorted_sets: dict[str, dict[str, float]] = {}
+        self._zrem_error = zrem_error
 
     def pipeline(self) -> FakePipeline:
         return FakePipeline(self.sorted_sets)
+
+    async def zrem(self, key: str, member: str) -> int:
+        if self._zrem_error:
+            raise RedisError("zrem failed")
+        members = self.sorted_sets.get(key, {})
+        return 1 if members.pop(member, None) is not None else 0
 
 
 class BrokenRedis:
@@ -113,6 +120,48 @@ async def test_blocks_requests_over_the_limit(monkeypatch) -> None:
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is False
+
+
+async def test_rejected_requests_do_not_consume_quota(monkeypatch) -> None:
+    """429 não ocupa slot: só as requisições aceitas ficam na janela."""
+    fake = FakeRedis()
+    monkeypatch.setattr(rate_limiter, "redis_client", fake)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 2)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
+    assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
+    # Cliente insiste depois do limite: cada tentativa é rejeitada, mas não
+    # pode empurrar a própria liberação pra frente.
+    for _ in range(5):
+        assert await rate_limiter.check_rate_limit(virtual_key_id=1) is False
+
+    assert len(fake.sorted_sets["ratelimit:1"]) == 2
+
+
+async def test_rejected_request_reports_zero_remaining(monkeypatch) -> None:
+    """No 429, remaining=0 — coerente com a rejeição (não sobra cota)."""
+    monkeypatch.setattr(rate_limiter, "redis_client", FakeRedis())
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 1)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+    status = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+    assert status.allowed is False
+    assert status.remaining == 0
+
+
+async def test_rollback_failure_keeps_the_request_rejected(monkeypatch) -> None:
+    """Se o zrem de rollback falhar, o veredito continua 429 (não vira 200)."""
+    monkeypatch.setattr(rate_limiter, "redis_client", FakeRedis(zrem_error=True))
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 1)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    with capture_logs() as logs:
+        assert await rate_limiter.check_rate_limit(virtual_key_id=7) is True
+        assert await rate_limiter.check_rate_limit(virtual_key_id=7) is False
+
+    assert any(entry["event"] == "rate_limit_rollback_failed" for entry in logs)
 
 
 async def test_limit_is_scoped_per_virtual_key(monkeypatch) -> None:
