@@ -51,9 +51,27 @@ async def check_rate_limit_status(virtual_key_id: int) -> RateLimitStatus:
             remaining=remaining,
             window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
         )
-    remaining = max(0, settings.RATE_LIMIT_REQUESTS - count)
+    allowed = count <= settings.RATE_LIMIT_REQUESTS
+    if not allowed:
+        # A requisição rejeitada JÁ entrou na sorted set (zadd roda antes do
+        # zcard). Deixá-la lá faz cada 429 consumir cota da janela: um cliente
+        # que insiste depois do limite empurra a própria liberação para frente
+        # (rajada de 600 requests com limite de 60/min ficava bloqueada por
+        # ~10min, não pelos 60s da janela). Desfazemos o zadd para que só as
+        # requisições ACEITAS ocupem os slots.
+        try:
+            await redis_client.zrem(key, member)
+        except RedisError as exc:
+            # Rollback é melhor-esforço: falhar aqui não muda o veredito (a
+            # requisição continua rejeitada), então não cai no ramo de
+            # fail-open/fail-closed do Redis — só fica um slot "fantasma" até
+            # a janela expirar.
+            logger.warning(
+                "rate_limit_rollback_failed", virtual_key_id=virtual_key_id, error=str(exc)
+            )
+    remaining = max(0, settings.RATE_LIMIT_REQUESTS - count) if allowed else 0
     return RateLimitStatus(
-        allowed=count <= settings.RATE_LIMIT_REQUESTS,
+        allowed=allowed,
         limit=settings.RATE_LIMIT_REQUESTS,
         remaining=remaining,
         window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,

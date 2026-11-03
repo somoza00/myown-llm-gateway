@@ -102,6 +102,15 @@ class RedisStub:
     def pipeline(self) -> RedisPipelineStub:
         return RedisPipelineStub(self.sorted_sets)
 
+    async def zrem(self, key: str, *members: str) -> int:
+        """Desfaz um zadd (usado pelo rollback do rate limit em requisição rejeitada)."""
+        current = self.sorted_sets.get(key, {})
+        removed = 0
+        for member in members:
+            if current.pop(member, None) is not None:
+                removed += 1
+        return removed
+
 
 @pytest.fixture(scope="session")
 def db() -> Iterator[None]:
