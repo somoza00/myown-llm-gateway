@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 
 from llm_gateway.routers.chat import authenticate_request
@@ -14,8 +16,15 @@ router = APIRouter(prefix="/api", tags=["logs"])
 async def list_logs(
     limit: int = Query(default=100, ge=1, le=500, description="Máx. de registros retornados."),
     offset: int = Query(default=0, ge=0, description="Pula os N primeiros registros (paginação)."),
-    status: str | None = Query(
-        default=None, description="Filtra por status exato ('ok' ou 'error')."
+    status: Literal["ok", "error"] | None = Query(
+        default=None,
+        # `str` livre aqui aceitava qualquer valor e devolvia 200 com lista
+        # vazia (`total: 0`): um filtro digitado errado ('erro', 'ERROR',
+        # 'failed') parecia "não há logs" no dashboard em vez de um erro de
+        # uso. Só existem dois status gravados (ver create_usage_log /
+        # create_failed_usage_log), então o valor é fechado: fora dele vira
+        # 400 invalid_request_error.
+        description="Filtra por status exato ('ok' ou 'error').",
     ),
     model: str | None = Query(default=None, description="Filtra por modelo exato."),
     provider: str | None = Query(
