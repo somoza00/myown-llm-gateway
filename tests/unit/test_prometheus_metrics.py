@@ -65,3 +65,54 @@ def test_render_multiprocess_branch_uses_collector(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
     body = prometheus_metrics.render()  # dir vazio → agrega nada, mas não quebra
     assert isinstance(body, bytes)
+
+
+def _reset_model_labels() -> None:
+    """Zera o catálogo de modelos aprendido (estado de módulo, entre testes)."""
+    prometheus_metrics._served_models.clear()
+
+
+def test_failure_with_client_supplied_model_does_not_create_a_label() -> None:
+    """404 com modelo inventado não vira série: o label é o catálogo atendido.
+
+    `record_failed_request` recebia `body.model` (texto livre do cliente), então
+    cada nome inexistente criava uma série nova em `llm_gateway_requests_total`.
+    """
+    _reset_model_labels()
+    prometheus_metrics.record_usage(_record())  # gpt-4o passa a ser "conhecido"
+    prometheus_metrics.record_failure("openai", "modelo-inventado-123", "model_not_found")
+
+    body = prometheus_metrics.render().decode()
+
+    assert "modelo-inventado-123" not in body
+    assert _metric_line(
+        body, "llm_gateway_requests_total",
+        provider="openai", model="unknown", status="error:model_not_found",
+    )
+
+
+def test_failure_keeps_model_label_for_a_model_a_provider_served() -> None:
+    """Modelo real (já atendido) continua identificado na série de erro."""
+    _reset_model_labels()
+    prometheus_metrics.record_usage(_record())
+    prometheus_metrics.record_failure("openai", "gpt-4o", "upstream_error")
+
+    body = prometheus_metrics.render().decode()
+
+    assert _metric_line(
+        body, "llm_gateway_requests_total",
+        provider="openai", model="gpt-4o", status="error:upstream_error",
+    )
+
+
+def test_model_catalog_is_capped() -> None:
+    """O catálogo tem teto duro: além dele o modelo cai em "unknown"."""
+    _reset_model_labels()
+    for index in range(prometheus_metrics._MAX_TRACKED_MODELS):
+        prometheus_metrics._remember_model(f"m{index}")
+    prometheus_metrics._remember_model("extra")
+
+    assert len(prometheus_metrics._served_models) == prometheus_metrics._MAX_TRACKED_MODELS
+    assert prometheus_metrics._model_label("extra") == "unknown"
+    assert prometheus_metrics._model_label("m0") == "m0"
+    assert prometheus_metrics._model_label("") == "unknown"

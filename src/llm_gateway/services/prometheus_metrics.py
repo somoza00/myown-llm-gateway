@@ -53,10 +53,43 @@ def _safe(value: str) -> str:
     return value or "unknown"
 
 
+# O label `model` de uma requisição COM ERRO vinha direto do corpo do request
+# (`body.model`), que é texto livre do cliente: cada string diferente criava uma
+# série nova em `llm_gateway_requests_total`. Um cliente que varre modelos
+# inexistentes (`POST /v1/chat/completions` com model="a1", "a2", ...) gerava um
+# 404 por tentativa e uma série por tentativa — memória do processo e
+# cardinalidade do Prometheus crescendo com tráfego de erro, sem teto (modelos
+# wildcard, com `supported_models` vazio, ainda aceitam qualquer nome).
+#
+# O valor exato do modelo pedido não se perde: ele continua em `usage_logs` e
+# aparece em `/api/logs`. Aqui o label é limitado ao catálogo que um provedor de
+# verdade já atendeu (`record_usage`) — conjunto finito, ditado pela config — e
+# o resto cai em "unknown".
+_MAX_TRACKED_MODELS = 50
+_served_models: set[str] = set()
+
+
+def _remember_model(model: str) -> None:
+    """Registra um modelo efetivamente atendido (teto duro no cardinality)."""
+    if model in _served_models or len(_served_models) >= _MAX_TRACKED_MODELS:
+        return
+    _served_models.add(model)
+
+
+def _model_label(model: str) -> str:
+    """Label de modelo limitado ao catálogo atendido; texto livre vira "unknown"."""
+    if not model:
+        return "unknown"
+    return model if model in _served_models else "unknown"
+
+
 def record_usage(record: UsageRecord) -> None:
     """Incrementa contadores/pisca o histograma a partir de um record de sucesso."""
     provider = _safe(record.provider)
-    REQUESTS.labels(provider=provider, model=_safe(record.model), status="ok").inc()
+    model = _safe(record.model)
+    _remember_model(model)
+    REQUESTS.labels(provider=provider, model=model, status="ok").inc()
+
     TOKENS.labels(provider=provider, direction="input").inc(record.input_tokens)
     TOKENS.labels(provider=provider, direction="output").inc(record.output_tokens)
     COST.labels(provider=provider).inc(float(record.estimated_cost))
@@ -64,9 +97,14 @@ def record_usage(record: UsageRecord) -> None:
 
 
 def record_failure(provider: str, model: str, error_type: str) -> None:
-    """Incrementa o contador de requisições marcado como erro (status='error')."""
+    """Incrementa o contador de requisições marcado como erro (status='error').
+
+    `model` pode vir cru do corpo do request (ver `_model_label`): só entra como
+    label se já foi atendido por um provedor; o resto vira "unknown", para o
+    label não crescer com texto livre do cliente.
+    """
     REQUESTS.labels(
-        provider=_safe(provider), model=_safe(model), status=f"error:{error_type}"
+        provider=_safe(provider), model=_model_label(model), status=f"error:{error_type}"
     ).inc()
 
 
