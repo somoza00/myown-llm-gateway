@@ -21,6 +21,16 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "sqlite+aiosqlite:///./llm_gateway.db"
     REDIS_URL: str = "redis://redis:6379/0"
+    # Teto de tempo de CADA comando ao Redis (leitura/resposta) e do handshake
+    # TCP. Sem eles o pool abre conexões sem deadline: um Redis que aceita a
+    # conexão e nunca responde (TCP meio-aberto depois de troca de rede/VPN,
+    # host suspenso, proxy no meio) deixava o comando pendurado para sempre.
+    # O `/health/ready` já tinha um teto próprio, mas os caminhos de request
+    # (cache, rate limit, spend cap) não — e são eles que seguram a requisição
+    # do cliente. Com o teto, a falha vira `RedisError` em segundos e os
+    # fallbacks que já existem (fail-open do rate limit, cache miss) assumem.
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 5.0
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float = 2.0
 
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
@@ -72,6 +82,16 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("REDIS_SOCKET_TIMEOUT_SECONDS", "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS")
+    @classmethod
+    def _positive_redis_timeout(cls, value: float) -> float:
+        """`0`/negativo não significa "sem limite" no redis-py: vira timeout
+        imediato e derrubaria TODO comando ao Redis. Falha no boot em vez de
+        deixar o gateway silenciosamente sem cache/rate limit."""
+        if value <= 0:
+            raise ValueError("os timeouts do Redis precisam ser maiores que zero")
         return value
 
 
