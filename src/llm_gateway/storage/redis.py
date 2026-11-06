@@ -12,17 +12,25 @@ from llm_gateway.core.config import get_settings
 
 settings = get_settings()
 
-redis_pool: ConnectionPool = ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
+# O pool nasce COM deadline de socket: sem `socket_timeout`/`socket_connect_timeout`
+# um Redis que aceita a conexão e nunca responde deixa cache, rate limit e spend
+# cap pendurados para sempre — e a requisição do cliente junto (o uvicorn não tem
+# request timeout). Com os tetos, o caso vira `RedisError` em segundos e os
+# fallbacks já implementados (cache miss, fail-open/fail-closed do rate limit)
+# assumem; nada aqui depende de comando bloqueante (BLPOP/SUBSCRIBE), então o
+# teto não corta operação legítima.
+redis_pool: ConnectionPool = ConnectionPool.from_url(
+    settings.REDIS_URL,
+    decode_responses=True,
+    socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+    socket_connect_timeout=settings.REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS,
+)
 
 redis_client: Redis = Redis(connection_pool=redis_pool)
 
-# Teto do PING usado por `/health/ready`. O pool é criado sem socket_timeout,
-# então um Redis que aceita a conexão TCP e nunca responde (conexão meio-aberta
-# depois de troca de rede/VPN, host suspenso, proxy no meio) deixa o `ping()`
-# bloqueado indefinidamente: a rota de readiness não retornava, o healthcheck
-# do Docker só estourava por timeout e cada probe ficava pendurado segurando
-# uma conexão do pool. Com o teto, o caso vira "degraded" (503) como qualquer
-# outra falha de Redis.
+# Teto do PING usado por `/health/ready`: continua mais apertado que o
+# `socket_timeout` para a sonda de readiness responder rápido (o container não
+# deve esperar o timeout cheio de um comando de negócio).
 HEALTHCHECK_TIMEOUT_SECONDS = 2.0
 
 

@@ -33,6 +33,7 @@ Edit `.env` and fill in at least one provider key:
 | `OLLAMA_ENABLED` / `OLLAMA_BASE_URL` / `OLLAMA_API_KEY` | Local/self-hosted Ollama: disabled by default (no key implies "configured" the way it does for the others, so it needs an explicit opt-in); `OLLAMA_API_KEY` is optional, for secured deployments only |
 | `DATABASE_URL` | Postgres DSN — the default (`postgresql+asyncpg://gateway:gateway@postgres:5432/llm_gateway`) matches the bundled compose stack |
 | `REDIS_URL` | Redis DSN — default matches the bundled `redis` service |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` / `REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS` | Deadlines for every Redis command and TCP handshake (default: 5 s / 2 s); without them a half-open connection hangs cache, rate limit and spend-cap checks — and the client request — forever |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials for the bundled `postgres` container (default: `gateway` / `gateway` / `llm_gateway`, matching the `DATABASE_URL` default above); not read by the gateway itself — set them only if you change `DATABASE_URL` to match |
 | `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` | Per-key rate limit (default: 60 requests / 60 s) |
 | `RATE_LIMIT_FAIL_OPEN` | If Redis is unreachable, allow requests through unmetered (`true`) or reject them (`false`, the default) — see [Cost protection](#cost-protection) |

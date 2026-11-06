@@ -71,3 +71,18 @@ async def test_close_redis_closes_client(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(storage_redis, "redis_client", stub)
     await storage_redis.close_redis()
     assert stub.closed is True
+
+
+def test_pool_is_built_with_socket_timeouts() -> None:
+    """O pool precisa nascer com deadline de socket, não só o PING do /health/ready.
+
+    Sem estes kwargs, um Redis meio-aberto pendurava cache/rate limit/spend cap
+    para sempre (e a requisição do cliente junto). Este teste falha se alguém
+    remover os timeouts do `ConnectionPool.from_url`.
+    """
+    kwargs = storage_redis.redis_pool.connection_kwargs
+    assert kwargs["socket_timeout"] == storage_redis.settings.REDIS_SOCKET_TIMEOUT_SECONDS
+    assert (
+        kwargs["socket_connect_timeout"]
+        == storage_redis.settings.REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS
+    )

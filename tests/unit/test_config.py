@@ -39,3 +39,20 @@ def test_blank_optional_numeric_does_not_break_other_fields(
     settings = Settings(_env_file=None)
     assert settings.GLOBAL_SPEND_LIMIT_USD is None
     assert settings.MAX_TOKENS_PER_REQUEST == 512
+
+
+@pytest.mark.parametrize(
+    "var", ["REDIS_SOCKET_TIMEOUT_SECONDS", "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS"]
+)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_non_positive_redis_timeout_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, var: str, value: str
+) -> None:
+    """`0` no redis-py não é "sem limite", é timeout imediato: falha no boot.
+
+    Sem a validação o gateway subia com um pool que estourava todo comando ao
+    Redis (cache/rate limit sempre em fallback) e o erro só aparecia em runtime.
+    """
+    monkeypatch.setenv(var, value)
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)
