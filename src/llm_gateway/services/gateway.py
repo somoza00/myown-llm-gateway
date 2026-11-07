@@ -7,6 +7,7 @@ import time
 from collections.abc import Coroutine
 from typing import Any
 
+from llm_gateway.core.exceptions import NoProviderAvailableError
 from llm_gateway.models.api import ChatRequest, ChatResponse
 from llm_gateway.models.provider import ModelPricing
 from llm_gateway.providers.factory import ProviderRegistry
@@ -25,6 +26,10 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 # de-duplicates within one gateway process — it does not coordinate across replicas,
 # which would need a distributed (Redis-based) lock instead.
 _inflight: dict[str, asyncio.Future[ChatResponse]] = {}
+
+# Folga somada ao pior caso da cadeia de fallback para o TTL do lock de
+# single-flight (ver `handle_chat_completion`).
+_LOCK_TTL_GRACE_SECONDS = 5.0
 
 
 def _fire_and_forget(coro: Coroutine[Any, Any, None]) -> None:
@@ -84,7 +89,30 @@ async def handle_chat_completion(
     # este cache key. Quem ganha o lock Redis faz a chamada; os demais esperam
     # (breve e limitado) o resultado chegar ao cache. Dentro de um processo, o
     # future `_inflight` acima já coalesceu — isto cobre o caso cross-réplica.
-    lock_token = await cache_service.acquire_lock(cache_key)
+    #
+    # O TTL do lock tem que cobrir o PIOR caso da chamada que ele protege (a
+    # cadeia inteira de fallback, cada provedor com seu timeout) — não um valor
+    # fixo. Com os 10s de antes, qualquer requisição mais lenta que isso perdia
+    # o lock no MEIO da chamada ao provedor: a réplica seguinte encontrava o
+    # lock "livre" e chamava o provedor de novo para o MESMO prompt (custo
+    # dobrado), exatamente o que o single-flight existe para evitar. O timeout
+    # por provedor é 30s por default, então o lock nunca cobria o caso real.
+    providers = select_providers(registry, request.model)
+    if not providers:
+        # Nenhum provedor candidato é erro do CLIENTE (modelo desconhecido — a
+        # rota traduz em 404). Falha ANTES de pegar o lock e registrar o future:
+        # não há chamada upstream para proteger, e um lock sem uso só atrasaria
+        # a próxima tentativa (`attempted_providers=[]` é o que a rota usa para
+        # distinguir "nada foi tentado" de "todos falharam").
+        raise NoProviderAvailableError(
+            f"No provider available for model '{request.model}' (attempted: none)",
+            attempted_providers=[],
+            last_error=None,
+        )
+    lock_ttl_seconds = (
+        sum(provider.config.timeout for provider in providers) + _LOCK_TTL_GRACE_SECONDS
+    )
+    lock_token = await cache_service.acquire_lock(cache_key, ttl_seconds=lock_ttl_seconds)
     if lock_token is None:
         waited = await cache_service.wait_for_result(cache_key)
         if waited is not None:
@@ -96,7 +124,6 @@ async def handle_chat_completion(
     future: asyncio.Future[ChatResponse] = asyncio.get_running_loop().create_future()
     _inflight[cache_key] = future
     try:
-        providers = select_providers(registry, request.model)
         serving_provider, response = await execute_with_fallback(providers, request)
     except Exception as exc:
         future.set_exception(exc)

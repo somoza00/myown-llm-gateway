@@ -198,3 +198,53 @@ async def test_response_format_is_part_of_the_cache_key() -> None:
             response_format={"type": "json_object"},
         )
     )
+
+
+async def test_acquire_lock_uses_the_ttl_of_the_call_it_guards(redis_stub) -> None:
+    """O TTL do lock é o da chamada protegida, não um valor fixo.
+
+    Com TTL fixo de 10s o lock expirava no MEIO de uma chamada normal de LLM
+    (timeout de 30s por provedor) e a réplica seguinte repetia a chamada ao
+    provedor para o mesmo prompt — o oposto do single-flight.
+    """
+    token = await cache.acquire_lock("key-1", ttl_seconds=65)
+
+    assert token is not None
+    assert redis_stub.expirations == [65]
+
+
+async def test_release_lock_removes_our_own_lock(redis_stub) -> None:
+    token = await cache.acquire_lock("key-1")
+    assert redis_stub.store["lock:key-1"] == token
+
+    await cache.release_lock("key-1", token)
+
+    assert "lock:key-1" not in redis_stub.store
+
+
+async def test_release_lock_does_not_delete_a_lock_someone_else_holds(redis_stub) -> None:
+    """Se o TTL expirou e outra réplica adquiriu o lock, liberar com o token
+    ANTIGO não pode apagar o lock dela (seria uma terceira chamada ao provedor
+    para o mesmo prompt). Comparar-e-remover é uma operação só, no servidor."""
+    token = await cache.acquire_lock("key-1")
+    redis_stub.store["lock:key-1"] = "token-de-outra-replica"
+
+    await cache.release_lock("key-1", token)
+
+    assert redis_stub.store["lock:key-1"] == "token-de-outra-replica"
+
+
+async def test_lock_failures_are_tolerated(monkeypatch) -> None:
+    """Redis fora não pode quebrar o request: sem lock, o gateway só calcula local."""
+
+    class BrokenRedis:
+        async def set(self, *args: object, **kwargs: object) -> None:
+            raise RedisError("down")
+
+        async def eval(self, *args: object) -> None:
+            raise RedisError("down")
+
+    monkeypatch.setattr("llm_gateway.services.cache.redis_client", BrokenRedis())
+
+    assert await cache.acquire_lock("key-1") is None
+    await cache.release_lock("key-1", "token")  # must not raise
