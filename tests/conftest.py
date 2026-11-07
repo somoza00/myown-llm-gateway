@@ -80,17 +80,31 @@ class RedisStub:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
+        # TTLs passados em `set(..., ex=...)`: o TTL do lock de single-flight
+        # precisa cobrir a chamada que ele protege, então os testes o conferem.
+        self.expirations: list[float] = []
 
     async def get(self, key: str) -> str | None:
         return self.store.get(key)
 
     async def set(
-        self, key: str, value: str, ex: int | None = None, nx: bool = False
+        self, key: str, value: str, ex: float | None = None, nx: bool = False
     ) -> bool | None:
         if nx and key in self.store:
             return None
+        if ex is not None:
+            self.expirations.append(ex)
         self.store[key] = value
         return True
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        """Executa o compare-and-delete do `release_lock` sem um Redis real."""
+        assert numkeys == 1, numkeys
+        key, token = keys_and_args[0], keys_and_args[1]
+        if self.store.get(key) == token:
+            del self.store[key]
+            return 1
+        return 0
 
     async def delete(self, *keys: str) -> int:
         removed = 0

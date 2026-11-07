@@ -240,7 +240,7 @@ async def test_two_leaders_for_same_key_do_not_crash_on_inflight_cleanup(
     gate = asyncio.Event()
     lock_calls = {"n": 0}
 
-    async def _gated_lock(cache_key):
+    async def _gated_lock(cache_key, *, ttl_seconds=None):
         # O 1º request segura o loop no gate (já passou pela checagem de
         # `_inflight` sem ter registrado o future); o 2º recebe None na hora —
         # é a janela em que os dois viram "líderes".
@@ -276,3 +276,36 @@ async def test_two_leaders_for_same_key_do_not_crash_on_inflight_cleanup(
     assert not any(isinstance(r, Exception) for r in results), results
     assert all(r.choices[0].message.content == "ok" for r in results)
     assert gateway._inflight == {}
+
+
+async def test_lock_ttl_covers_the_whole_upstream_call(redis_stub, monkeypatch) -> None:
+    """Regressão: o TTL do lock de single-flight era fixo em 10s, menor que o
+    timeout do provedor (30s default).
+
+    Numa chamada de LLM mais lenta que 10s — o caso comum — o lock expirava com
+    o líder AINDA esperando o provedor; a réplica seguinte encontrava o lock
+    "livre" e pagava a mesma chamada de novo. O TTL agora é o pior caso da
+    cadeia de fallback (soma dos timeouts) + folga.
+    """
+    captured: dict[str, float | None] = {}
+    real_acquire = gateway.cache_service.acquire_lock
+
+    async def _spy(cache_key, *, ttl_seconds=None):
+        captured["ttl"] = ttl_seconds
+        return await real_acquire(cache_key, ttl_seconds=ttl_seconds)
+
+    monkeypatch.setattr(gateway.cache_service, "acquire_lock", _spy)
+
+    release = asyncio.Event()
+    release.set()
+    registry = ProviderRegistry(
+        [SlowStubProvider(make_response(), release=release)], httpx.AsyncClient()
+    )
+
+    await gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+
+    # ProviderConfig.timeout default = 30s, uma única rota possível para "m".
+    assert captured["ttl"] == pytest.approx(30.0 + gateway._LOCK_TTL_GRACE_SECONDS)
+    # E o lock foi liberado ao fim (não fica preso pelo TTL longo).
+    key = gateway.cache_service.build_cache_key(REQUEST, namespace=1)
+    assert await redis_stub.get(f"lock:{key}") is None

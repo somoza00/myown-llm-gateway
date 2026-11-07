@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import secrets
 import time
+from collections.abc import Awaitable
+from typing import cast
 
 from redis.exceptions import RedisError
 
@@ -105,35 +108,65 @@ async def set(key: str, value: ChatResponse) -> None:
 # provider for a given cache key while the others wait for the result to land in
 # cache. TTL bounds the lock if the holder dies; the wait is bounded so a slow or
 # dead holder never starves the losers (they fall back to calling the provider).
+#
+# `_LOCK_TTL_SECONDS` is only the FALLBACK default: `acquire_lock` accepts the
+# TTL the caller actually needs (the gateway passes the worst-case duration of
+# the upstream call it is guarding — see `services/gateway.py`). A TTL shorter
+# than the call means the lock expires while the holder is still waiting on the
+# provider, so the next replica acquires the "free" lock and pays for the same
+# prompt again.
 _LOCK_TTL_SECONDS = 10
 _LOCK_POLL_INTERVAL_SECONDS = 0.05
 _WAIT_TIMEOUT_SECONDS = 2.0
+
+# Libera o lock apenas se ele ainda for nosso, em UMA operação no servidor.
+# `GET` seguido de `DEL` não é atômico: entre as duas chamadas o TTL pode
+# expirar e outra réplica pode adquirir o lock — o `DEL` então apagaria o lock
+# DELA, deixando uma terceira réplica entrar junto (duas chamadas ao provedor
+# para o mesmo prompt, com o custo dobrado). O script compara e remove na mesma
+# execução, como recomenda o padrão de lock do Redis.
+_RELEASE_LOCK_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 
 def _lock_key(cache_key: str) -> str:
     return f"lock:{cache_key}"
 
 
-async def acquire_lock(cache_key: str) -> str | None:
+async def acquire_lock(cache_key: str, *, ttl_seconds: float = _LOCK_TTL_SECONDS) -> str | None:
     """Try to become the single caller for `cache_key` across replicas.
+
+    `ttl_seconds` must outlive the upstream call being guarded, otherwise the
+    lock expires mid-request and the next replica duplicates the provider call.
 
     Returns a release token on success, or None if another replica holds the
     lock or Redis is unavailable (caller then falls back to a local call).
     """
     token = secrets.token_hex(8)
     try:
-        ok = await redis_client.set(_lock_key(cache_key), token, nx=True, ex=_LOCK_TTL_SECONDS)
+        # `ex` do redis-py aceita int/timedelta: TTL quebrado arredonda PARA CIMA,
+        # senão uma folga fracionária encurtaria o lock.
+        ok = await redis_client.set(
+            _lock_key(cache_key), token, nx=True, ex=math.ceil(ttl_seconds)
+        )
     except RedisError:
         return None
     return token if ok else None
 
 
 async def release_lock(cache_key: str, token: str) -> None:
-    """Release the lock only if we still own it (token matches); never raises."""
-    key = _lock_key(cache_key)
+    """Release the lock only if we still own it (atomic compare-and-delete); never raises."""
     try:
-        if await redis_client.get(key) == token:
-            await redis_client.delete(key)
+        # O stub de tipos do redis-py anota `eval` como `Awaitable[str] | str`
+        # (o cliente sync devolve str); com o cliente async é sempre awaitable.
+        await cast(
+            "Awaitable[object]",
+            redis_client.eval(_RELEASE_LOCK_SCRIPT, 1, _lock_key(cache_key), token),
+        )
     except RedisError:
         pass
 
