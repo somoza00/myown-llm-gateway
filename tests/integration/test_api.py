@@ -13,6 +13,9 @@ from sqlalchemy import select
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 CHAT_BODY = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
 AUTH = {"Authorization": "Bearer test-virt-key"}
+# Mutações do cadastro de chaves (`POST`/`DELETE /api/keys`) exigem a chave de
+# ADMINISTRAÇÃO, não uma chave virtual (ver `keys.require_admin_key`).
+ADMIN_AUTH = {"Authorization": "Bearer test-admin-key"}
 
 OPENAI_STREAM = (
     'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o",'
@@ -646,7 +649,7 @@ async def test_create_key_returns_raw_key_once_and_lists_it(client, api_key) -> 
     """POST /api/keys devolve a chave crua; o GET nunca expõe hash nem a chave."""
     resp = await client.post(
         "/api/keys",
-        headers=AUTH,
+        headers=ADMIN_AUTH,
         json={"client_name": "dashboard", "expires_in_days": 7, "spend_limit_usd": 5},
     )
     assert resp.status_code == 201, resp.text
@@ -665,23 +668,72 @@ async def test_create_key_returns_raw_key_once_and_lists_it(client, api_key) -> 
 
 async def test_create_key_rejects_blank_client_name(client, api_key) -> None:
     """Nome só-espaços é o rótulo da auditoria — rejeita (400, padrão OpenAI-style)."""
-    resp = await client.post("/api/keys", headers=AUTH, json={"client_name": "   "})
+    resp = await client.post("/api/keys", headers=ADMIN_AUTH, json={"client_name": "   "})
     assert resp.status_code == 400
     assert resp.json()["error"]["type"] == "invalid_request_error"
 
 
 async def test_revoke_key_deactivates_and_404s_when_unknown(client, api_key) -> None:
     created = (
-        await client.post("/api/keys", headers=AUTH, json={"client_name": "temp"})
+        await client.post("/api/keys", headers=ADMIN_AUTH, json={"client_name": "temp"})
     ).json()
-    assert (await client.delete(f"/api/keys/{created['id']}", headers=AUTH)).status_code == 204
+    resp = await client.delete(f"/api/keys/{created['id']}", headers=ADMIN_AUTH)
+    assert resp.status_code == 204
 
     keys = (await client.get("/api/keys", headers=AUTH)).json()["keys"]
     assert next(k for k in keys if k["id"] == created["id"])["is_active"] is False
 
-    assert (await client.delete("/api/keys/999999", headers=AUTH)).status_code == 404
+    assert (await client.delete("/api/keys/999999", headers=ADMIN_AUTH)).status_code == 404
 
 
 async def test_key_admin_requires_auth(client) -> None:
+    """Sem header nenhum, criar/revogar é 401 (não há ADMIN_API_KEY apresentada)."""
     assert (await client.post("/api/keys", json={"client_name": "x"})).status_code == 401
     assert (await client.delete("/api/keys/1")).status_code == 401
+
+
+async def test_virtual_key_cannot_create_or_revoke_keys(client, api_key) -> None:
+    """Regressão (escalada de privilégio): chave VIRTUAL não administra chaves.
+
+    Antes, `POST /api/keys` era protegido por `authenticate_request`: uma chave de
+    cliente emitia outra chave sem teto de gasto (contornando o spend cap) e
+    revogava as chaves dos outros.
+    """
+    create = await client.post("/api/keys", headers=AUTH, json={"client_name": "escalada"})
+    assert create.status_code == 401, create.text
+    assert "error" in create.json()
+
+    revoke = await client.delete(f"/api/keys/{api_key}", headers=AUTH)
+    assert revoke.status_code == 401, revoke.text
+
+    # A chave virtual continua ativa: a tentativa de revogação não fez efeito.
+    keys = (await client.get("/api/keys", headers=AUTH)).json()["keys"]
+    assert next(k for k in keys if k["id"] == api_key)["is_active"] is True
+
+
+async def test_admin_key_is_not_a_virtual_key(client, registry, redis_stub, api_key) -> None:
+    """ADMIN_API_KEY administra o cadastro, mas não chama /v1 (não é chave virtual)."""
+    resp = await client.post("/v1/chat/completions", headers=ADMIN_AUTH, json=CHAT_BODY)
+    assert resp.status_code == 401
+    assert resp.json()["error"]["message"] == "Invalid API key"
+
+
+async def test_key_admin_disabled_when_admin_key_unset(
+    client, api_key, monkeypatch
+) -> None:
+    """Sem ADMIN_API_KEY configurada, as mutações respondem 403 (fail-closed).
+
+    Antes, "não configurado" caía no mesmo caminho de qualquer chave virtual —
+    ou seja, a ausência de configuração equivalia a liberar a administração.
+    """
+    from types import SimpleNamespace
+
+    from llm_gateway.routers import keys as keys_router
+
+    monkeypatch.setattr(
+        keys_router, "get_settings", lambda: SimpleNamespace(ADMIN_API_KEY=None)
+    )
+    create = await client.post("/api/keys", headers=ADMIN_AUTH, json={"client_name": "x"})
+    assert create.status_code == 403
+    assert "ADMIN_API_KEY" in create.json()["error"]["message"]
+    assert (await client.delete(f"/api/keys/{api_key}", headers=ADMIN_AUTH)).status_code == 403

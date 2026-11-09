@@ -178,6 +178,15 @@ request. Key creation and revocation are recorded in the `audit_logs` table
 (action, key id, client name, timestamp) — an append-only trail, never updated
 by application code.
 
+The same operations are exposed over HTTP (`POST /api/keys`,
+`DELETE /api/keys/{id}`, plus `GET /api/keys` for metadata), but the mutating
+ones require a **separate admin credential**: set `ADMIN_API_KEY` in `.env` and
+send it as `Authorization: Bearer <ADMIN_API_KEY>`. A virtual key is not
+accepted there — otherwise any client key (with its own spend cap and expiry)
+could mint an uncapped key for itself or revoke another tenant's key. With
+`ADMIN_API_KEY` unset, those two routes answer `403` and key management stays
+CLI-only, which is the default and the way a deploy bootstraps its first key.
+
 ## 4. First call
 
 Non-streaming:

@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     # rejeitadas (hard-stop fail-closed) até o limite ser elevado/removido.
     GLOBAL_SPEND_LIMIT_USD: float | None = None
 
+    # Chave de ADMINISTRAÇÃO do gateway. Não é uma chave virtual: é comparada no
+    # header `Authorization: Bearer` e só serve para os endpoints que MUTAM o
+    # cadastro de chaves (`POST /api/keys`, `DELETE /api/keys/{id}`). Sem ela, a
+    # API não tinha noção de privilégio nenhum: qualquer chave virtual — inclusive
+    # uma de cliente, com teto de gasto e prazo curtos — podia criar chaves novas
+    # SEM teto (bypassando o próprio spend cap) e revogar as chaves dos outros.
+    # None (default) => essas mutações respondem 403; criar chaves continua
+    # possível pelo CLI (`llm-gateway create-key`), que fala direto com o banco.
+    ADMIN_API_KEY: str | None = None
+
     # Hard ceiling on `max_tokens` per request; requests above it are rejected,
     # and requests that omit `max_tokens` get this value instead of an
     # unbounded provider default. Protects against a single request generating
@@ -79,6 +89,19 @@ class Settings(BaseSettings):
         empty string into a `float | None` field and pydantic aborted with
         "unable to parse string as a number" — the gateway did not even start,
         and the error pointed at the env var instead of the intended default.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("ADMIN_API_KEY", mode="before")
+    @classmethod
+    def _blank_admin_key_means_unset(cls, value: object) -> object:
+        """`ADMIN_API_KEY=` vazio (como vem no `.env.example`) significa "sem admin".
+
+        Sem isto, um `.env` copiado do exemplo traz a string vazia e o admin
+        ficaria "configurado" com um segredo que todo mundo conhece — o
+        `Bearer ` (vazio) passaria a comparação.
         """
         if isinstance(value, str) and not value.strip():
             return None

@@ -7,13 +7,15 @@ Criar devolve a chave crua **uma única vez** (só o hash é persistido, como no
 
 from __future__ import annotations
 
+import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field, field_validator
 
+from llm_gateway.core.config import get_settings
 from llm_gateway.core.security import hash_key
 from llm_gateway.routers.chat import authenticate_request
 from llm_gateway.storage.database import async_session_factory
@@ -25,6 +27,51 @@ router = APIRouter(prefix="/api", tags=["keys"])
 # Same default as the CLI: keys expire unless the caller explicitly opts out,
 # so a leaked key does not authenticate forever.
 _DEFAULT_KEY_EXPIRY_DAYS = 90
+
+
+def _presented_bearer(authorization: str | None) -> str:
+    """Extrai o token do header `Authorization: Bearer <token>` (vazio se ausente)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return ""
+    return authorization.removeprefix("Bearer ").strip()
+
+
+async def require_admin_key(authorization: str | None = Header(default=None)) -> None:
+    """Exige `ADMIN_API_KEY` nas rotas que MUTAM o cadastro de chaves virtuais.
+
+    Antes, criar e revogar chave era protegido por `authenticate_request`: qualquer
+    chave VIRTUAL (a credencial que um cliente recebe para chamar `/v1/...`) podia
+    `POST /api/keys` e emitir uma chave nova sem teto de gasto — contornando o
+    limite da própria chave e o `GLOBAL_SPEND_LIMIT_USD` — e `DELETE
+    /api/keys/{id}` para revogar a chave de outro cliente (negação de serviço).
+    A chave emitida nem precisa de acesso ao banco: uma chave de cliente vazada
+    escalava para administração total do gateway.
+
+    Fail-closed: sem `ADMIN_API_KEY` configurada, as mutações respondem 403 em vez
+    de voltar a aceitar qualquer chave virtual. Criar chaves continua disponível
+    pelo CLI (`llm-gateway create-key`), que roda dentro do container e fala
+    direto com o banco — o bootstrap de um deploy não depende desta rota.
+    """
+    admin_key = get_settings().ADMIN_API_KEY
+    if not admin_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "administração de chaves desabilitada: defina ADMIN_API_KEY para "
+                "criar/revogar chaves via HTTP (ou use o CLI `create-key`)"
+            ),
+        )
+    presented = _presented_bearer(authorization)
+    # Comparação em bytes e em tempo constante: `compare_digest` com `str` levanta
+    # TypeError num caractere não-ASCII (o header chega decodificado em latin-1),
+    # e `==` vazaria o comprimento do prefixo correto pelo tempo de resposta.
+    if not presented or not hmac.compare_digest(
+        presented.encode("utf-8"), admin_key.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="ADMIN_API_KEY inválida ou ausente",
+        )
 
 
 class KeyCreate(BaseModel):
@@ -92,7 +139,7 @@ async def get_keys(_virtual_key_id: int = Depends(authenticate_request)) -> dict
 
 @router.post("/keys", status_code=status.HTTP_201_CREATED, response_model=KeyCreated)
 async def create_key(
-    payload: KeyCreate, _virtual_key_id: int = Depends(authenticate_request)
+    payload: KeyCreate, _admin: None = Depends(require_admin_key)
 ) -> KeyCreated:
     """Cria uma chave virtual e devolve a chave CRUA (uma única vez).
 
@@ -100,6 +147,10 @@ async def create_key(
     (`expires_in_days=null` ⇒ sem expiração), `spend_limit_usd` opcional. A ação
     é auditada (`key_created`); apenas o hash é persistido — a chave crua não
     pode ser recuperada depois.
+
+    Exige `ADMIN_API_KEY` (não uma chave virtual): emitir credencial é uma
+    operação administrativa, e uma chave de cliente conseguindo emitir outra
+    tornaria inútil o teto de gasto/prazo da primeira.
     """
     expires_at = (
         datetime.now(UTC) + timedelta(days=payload.expires_in_days)
@@ -143,12 +194,15 @@ async def create_key(
 
 @router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_key(
-    key_id: int, _virtual_key_id: int = Depends(authenticate_request)
+    key_id: int, _admin: None = Depends(require_admin_key)
 ) -> Response:
     """Revoga (desativa) uma chave virtual; 404 se não existir. Ação auditada.
 
     Revogar é idempotente na prática: a chave já inativa continua inativa e a
     rota responde 204 (o importante é que ela não autentique mais).
+
+    Exige `ADMIN_API_KEY`: com uma chave virtual qualquer, revogar era um
+    caminho de negação de serviço contra as chaves dos outros clientes.
     """
     key = await deactivate_key(key_id)
     if key is None:
