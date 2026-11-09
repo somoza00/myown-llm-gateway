@@ -20,6 +20,9 @@ os.environ["OPENAI_API_KEY"] = "test-openai-key"
 os.environ["GROQ_API_KEY"] = "test-groq-key"
 os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 os.environ["MISTRAL_API_KEY"] = "test-mistral-key"
+# Chave de administração das rotas que criam/revogam chaves virtuais via HTTP
+# (`POST`/`DELETE /api/keys`). Precisa existir ANTES do primeiro `get_settings()`.
+os.environ["ADMIN_API_KEY"] = "test-admin-key"
 
 
 class RedisPipelineStub:
