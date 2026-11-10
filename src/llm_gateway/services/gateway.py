@@ -125,6 +125,18 @@ async def handle_chat_completion(
     _inflight[cache_key] = future
     try:
         serving_provider, response = await execute_with_fallback(providers, request)
+        # Grava no cache ANTES de soltar o lock Redis. Na ordem anterior (o
+        # `release_lock` no `finally` e o `set` só depois do `future.set_result`)
+        # existia uma janela em que o lock já estava livre e o cache ainda
+        # vazio: a réplica seguinte adquiria o lock, não encontrava resultado
+        # em `wait_for_result` e chamava o provedor de novo para o MESMO prompt
+        # — exatamente o custo dobrado que o single-flight (e o TTL calculado
+        # acima para cobrir a cadeia de fallback) existem para evitar. Com a
+        # escrita aqui dentro, quando o lock é liberado o resultado já está no
+        # Redis, então quem pegar o lock logo em seguida acerta o cache.
+        # `cache_service.set` engole `RedisError`, portanto gravar antes não
+        # muda o desfecho da requisição quando o Redis está fora.
+        await cache_service.set(cache_key, response)
     except Exception as exc:
         future.set_exception(exc)
         # Mark it retrieved even if no follower ever awaits this future: otherwise
@@ -143,7 +155,6 @@ async def handle_chat_completion(
     future.set_result(response)
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    await cache_service.set(cache_key, response)
 
     record = build_usage_record(
         virtual_key_id=virtual_key_id,
