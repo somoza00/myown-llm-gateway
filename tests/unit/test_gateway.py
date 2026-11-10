@@ -309,3 +309,43 @@ async def test_lock_ttl_covers_the_whole_upstream_call(redis_stub, monkeypatch) 
     # E o lock foi liberado ao fim (não fica preso pelo TTL longo).
     key = gateway.cache_service.build_cache_key(REQUEST, namespace=1)
     assert await redis_stub.get(f"lock:{key}") is None
+
+async def test_cache_is_written_before_the_lock_is_released(redis_stub, monkeypatch) -> None:
+    """Regressão: o lock cross-réplica era liberado ANTES da escrita no cache.
+
+    A ordem antiga era `release_lock` no `finally` e `cache_service.set` só
+    depois. Na janela entre os dois, outra réplica adquiria o lock, não achava
+    nada em `wait_for_result` e chamava o provedor de novo para o MESMO prompt
+    — o custo dobrado que o single-flight existe para evitar. Com a escrita
+    antes do release, quem pegar o lock em seguida já encontra o resultado.
+    """
+    key = gateway.cache_service.build_cache_key(REQUEST, namespace=1)
+    events: list[str] = []
+    cached_at_release: dict[str, object] = {}
+
+    real_set = gateway.cache_service.set
+    real_release = gateway.cache_service.release_lock
+
+    async def _spy_set(cache_key, value):
+        events.append("set")
+        await real_set(cache_key, value)
+
+    async def _spy_release(cache_key, token):
+        events.append("release")
+        # Estado do cache no instante em que o lock deixa de ser nosso.
+        cached_at_release["value"] = await redis_stub.get(key)
+        await real_release(cache_key, token)
+
+    monkeypatch.setattr(gateway.cache_service, "set", _spy_set)
+    monkeypatch.setattr(gateway.cache_service, "release_lock", _spy_release)
+
+    release = asyncio.Event()
+    release.set()
+    registry = ProviderRegistry(
+        [SlowStubProvider(make_response(), release=release)], httpx.AsyncClient()
+    )
+
+    await gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+
+    assert events == ["set", "release"], "o cache deve ser gravado antes de soltar o lock"
+    assert cached_at_release["value"] is not None, "lock livre com cache vazio duplica a chamada"
