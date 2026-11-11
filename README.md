@@ -39,6 +39,7 @@ Edit `.env` and fill in at least one provider key:
 | `RATE_LIMIT_FAIL_OPEN` | If Redis is unreachable, allow requests through unmetered (`true`) or reject them (`false`, the default) — see [Cost protection](#cost-protection) |
 | `MAX_TOKENS_PER_REQUEST` | Hard ceiling on `max_tokens` per request; also the value used when a request omits `max_tokens` (default: 4096) |
 | `CACHE_TTL_SECONDS` | Response cache TTL (default: 300 s) |
+| `ENVIRONMENT` | `development` (default) or `production`: in `production` the interactive docs (`/docs`, `/redoc`) and `/openapi.json` are **not** served, so the full API contract is not published to whoever can reach the port |
 | `GATEWAY_PORT` | Host port for the API (default: 8000) |
 
 ## 2. Start the stack

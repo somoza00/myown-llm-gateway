@@ -142,7 +142,23 @@ async def _validation_exception_handler(_request: Request, exc: Exception) -> JS
 
 def create_app() -> FastAPI:
     """Build the FastAPI application with all routers and the lifespan handler."""
-    app = FastAPI(title="LLM Gateway", version="0.1.0", lifespan=lifespan)
+    # `ENVIRONMENT` existia no Settings e não era lido em lugar nenhum: subir
+    # com `ENVIRONMENT=production` não mudava nada, e `/docs`, `/redoc` e
+    # `/openapi.json` continuavam públicos. Numa instância de produção isso
+    # entrega de graça o mapa completo da API (todo endpoint, todo schema, os
+    # nomes dos campos de administração de chaves) para qualquer um que
+    # alcançar a porta — é a mesma decisão que o backend do
+    # evaluation-framework já toma, e o gateway é justamente a superfície
+    # pública. Em desenvolvimento os três continuam disponíveis.
+    is_production = get_settings().ENVIRONMENT == "production"
+    app = FastAPI(
+        title="LLM Gateway",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else "/openapi.json",
+    )
     app.middleware("http")(_request_id_middleware)
     app.middleware("http")(_security_headers_middleware)
     app.add_exception_handler(HTTPException, _openai_style_exception_handler)
