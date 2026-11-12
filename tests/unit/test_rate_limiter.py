@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from redis.exceptions import RedisError
 from structlog.testing import capture_logs
 
@@ -31,6 +33,12 @@ class FakePipeline:
         self._ops.append(("expire", key, seconds))
         return self
 
+    def zrange(
+        self, key: str, start: int, end: int, withscores: bool = False
+    ) -> FakePipeline:
+        self._ops.append(("zrange", key, start, end, withscores))
+        return self
+
     async def execute(self) -> list:
         results = []
         for op in self._ops:
@@ -51,6 +59,14 @@ class FakePipeline:
                 results.append(len(self._sorted_sets.get(key, {})))
             elif kind == "expire":
                 results.append(True)
+            elif kind == "zrange":
+                _, key, start, end, withscores = op
+                ordered = sorted(
+                    self._sorted_sets.get(key, {}).items(), key=lambda item: item[1]
+                )
+                stop = None if end == -1 else end + 1
+                page = ordered[start:stop]
+                results.append(page if withscores else [member for member, _ in page])
         return results
 
     async def __aenter__(self) -> FakePipeline:
@@ -99,6 +115,9 @@ class BrokenRedis:
     def expire(self, *a: object, **k: object) -> BrokenRedis:
         return self
 
+    def zrange(self, *a: object, **k: object) -> BrokenRedis:
+        return self
+
     async def execute(self) -> list:
         raise RedisError("redis is down")
 
@@ -120,6 +139,39 @@ async def test_blocks_requests_over_the_limit(monkeypatch) -> None:
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is True
     assert await rate_limiter.check_rate_limit(virtual_key_id=1) is False
+
+
+async def test_reset_segue_o_request_mais_antigo_da_janela(monkeypatch) -> None:
+    """Reset = tempo até o slot MAIS ANTIGO expirar, não a janela cheia.
+
+    Com `window_seconds` fixo, um cliente bloqueado era mandado esperar a janela
+    inteira (60s) mesmo quando o request mais antigo já tinha 45s de idade —
+    esperava 45s a mais do que precisava.
+    """
+    fake = FakeRedis()
+    monkeypatch.setattr(rate_limiter, "redis_client", fake)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 2)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+    fake.sorted_sets["ratelimit:1"] = {"antigo": time.time() - 45}
+
+    status = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+
+    assert status.window_seconds == 60
+    assert 14 <= status.reset_seconds <= 15
+
+
+async def test_reset_no_429_conta_do_slot_aceito_mais_antigo(monkeypatch) -> None:
+    """No 429, o reset ignora o próprio request rejeitado (que sai da janela)."""
+    fake = FakeRedis()
+    monkeypatch.setattr(rate_limiter, "redis_client", fake)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_REQUESTS", 1)
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+    fake.sorted_sets["ratelimit:1"] = {"aceito": time.time() - 50}
+
+    status = await rate_limiter.check_rate_limit_status(virtual_key_id=1)
+
+    assert status.allowed is False
+    assert 9 <= status.reset_seconds <= 10
 
 
 async def test_rejected_requests_do_not_consume_quota(monkeypatch) -> None:
