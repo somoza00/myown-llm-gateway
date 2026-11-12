@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -24,6 +25,29 @@ class RateLimitStatus:
     limit: int
     remaining: int
     window_seconds: int
+    # Segundos até o slot MAIS ANTIGO da janela deslizante expirar — é quando a
+    # cota libera de fato. Antes os headers reportavam `window_seconds` sempre,
+    # que só é o valor certo no instante em que o primeiro request entrou.
+    reset_seconds: int
+
+
+def _reset_seconds(oldest: list[tuple[str, float]], now: float) -> int:
+    """Segundos até o slot mais antigo da janela expirar (0..window_seconds).
+
+    A janela é deslizante: cada slot libera quando o request mais antigo
+    completa `RATE_LIMIT_WINDOW_SECONDS`. Com o valor fixo da janela, um cliente
+    bloqueado era mandado esperar 60s mesmo que o request mais antigo já tivesse
+    55s — esperava 55s a mais para nada.
+    """
+    try:
+        _, score = oldest[0]
+        waited = now - float(score)
+    except (IndexError, TypeError, ValueError):
+        # Sem a leitura do membro mais antigo não dá para calcular: reporta a
+        # janela cheia (comportamento antigo) em vez de inventar um valor menor.
+        return settings.RATE_LIMIT_WINDOW_SECONDS
+    remaining = settings.RATE_LIMIT_WINDOW_SECONDS - max(0.0, waited)
+    return max(0, min(settings.RATE_LIMIT_WINDOW_SECONDS, math.ceil(remaining)))
 
 
 async def check_rate_limit_status(virtual_key_id: int) -> RateLimitStatus:
@@ -38,7 +62,10 @@ async def check_rate_limit_status(virtual_key_id: int) -> RateLimitStatus:
             pipe.zadd(key, {member: now})
             pipe.zcard(key)
             pipe.expire(key, settings.RATE_LIMIT_WINDOW_SECONDS)
-            _, _, count, _ = await pipe.execute()
+            # O membro mais antigo da janela diz QUANDO a cota libera (o
+            # `X-RateLimit-Reset`/`Retry-After` real), não só o tamanho dela.
+            pipe.zrange(key, 0, 0, withscores=True)
+            _, _, count, _, oldest = await pipe.execute()
     except RedisError as exc:
         logger.warning("rate_limit_check_failed", virtual_key_id=virtual_key_id, error=str(exc))
         # Fail-open: passa, mas não afirma cota falsa (o count é desconhecido
@@ -50,6 +77,8 @@ async def check_rate_limit_status(virtual_key_id: int) -> RateLimitStatus:
             limit=settings.RATE_LIMIT_REQUESTS,
             remaining=remaining,
             window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+            # Com o Redis fora não há janela observável: reporta a janela cheia.
+            reset_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
         )
     allowed = count <= settings.RATE_LIMIT_REQUESTS
     if not allowed:
@@ -75,6 +104,7 @@ async def check_rate_limit_status(virtual_key_id: int) -> RateLimitStatus:
         limit=settings.RATE_LIMIT_REQUESTS,
         remaining=remaining,
         window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+        reset_seconds=_reset_seconds(oldest, now),
     )
 
 

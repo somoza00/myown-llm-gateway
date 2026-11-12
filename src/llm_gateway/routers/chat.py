@@ -98,20 +98,24 @@ async def enforce_rate_limit(
     rl_status = await check_rate_limit_status(virtual_key_id)
     response.headers["X-RateLimit-Limit"] = str(rl_status.limit)
     response.headers["X-RateLimit-Remaining"] = str(rl_status.remaining)
-    # X-RateLimit-Reset: segundos até a janela do rate-limit reiniciar (o
-    # tamanho da janela). Client pode agendar o retry sem adivinhar/quebrar.
-    response.headers["X-RateLimit-Reset"] = str(rl_status.window_seconds)
+    # X-RateLimit-Reset: segundos até a janela DESLIZANTE liberar o slot mais
+    # antigo — não o tamanho da janela. Com o valor fixo, quem batia o limite
+    # 55s depois do primeiro request era mandado esperar os 60s cheios (55 a
+    # mais do que o necessário). O cliente agenda o retry sem adivinhar.
+    response.headers["X-RateLimit-Reset"] = str(rl_status.reset_seconds)
     if not rl_status.allowed:
-        settings = get_settings()
         record_failed_request(virtual_key_id=virtual_key_id, error_type="rate_limited")
+        # Retry-After segue o reset real (mesmo cálculo), com piso de 1s: um 429
+        # com `Retry-After: 0` faz cliente em loop apertar o servidor de novo.
+        retry_after = max(1, rl_status.reset_seconds)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}},
             headers={
-                "Retry-After": str(settings.RATE_LIMIT_WINDOW_SECONDS),
+                "Retry-After": str(retry_after),
                 "X-RateLimit-Limit": str(rl_status.limit),
                 "X-RateLimit-Remaining": str(rl_status.remaining),
-                "X-RateLimit-Reset": str(rl_status.window_seconds),
+                "X-RateLimit-Reset": str(rl_status.reset_seconds),
             },
         )
     return virtual_key_id

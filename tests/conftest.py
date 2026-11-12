@@ -48,6 +48,12 @@ class RedisPipelineStub:
         self._ops.append(("expire", key, seconds))
         return self
 
+    def zrange(
+        self, key: str, start: int, end: int, withscores: bool = False
+    ) -> RedisPipelineStub:
+        self._ops.append(("zrange", key, start, end, withscores))
+        return self
+
     async def execute(self) -> list:
         results = []
         for op in self._ops:
@@ -68,6 +74,15 @@ class RedisPipelineStub:
                 results.append(len(self._sorted_sets.get(key, {})))
             elif kind == "expire":
                 results.append(True)
+            elif kind == "zrange":
+                _, key, start, end, withscores = op
+                ordered = sorted(
+                    self._sorted_sets.get(key, {}).items(), key=lambda item: item[1]
+                )
+                # Redis usa índices inclusivos e aceita -1 como "último".
+                stop = None if end == -1 else end + 1
+                page = ordered[start:stop]
+                results.append(page if withscores else [member for member, _ in page])
         return results
 
     async def __aenter__(self) -> RedisPipelineStub:
