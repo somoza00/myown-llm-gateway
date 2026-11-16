@@ -257,3 +257,77 @@ def test_create_key_no_expiry_and_days_are_mutually_exclusive(monkeypatch) -> No
     with pytest.raises(SystemExit) as ei:
         cli.main()
     assert ei.value.code == 2  # parser.error() sai com código 2
+
+
+def _dispatch_create_key(monkeypatch, argv: list[str]) -> dict[str, object]:
+    """Roda o parser de `create-key` com `_create_key` trocado por um espião."""
+    called: dict[str, object] = {}
+
+    async def fake_create_key(
+        client_name: str,
+        *,
+        expires_in_days: int | None = None,
+        spend_limit_usd: float | None = None,
+    ) -> None:
+        called["client_name"] = client_name
+        called["expires_in_days"] = expires_in_days
+        called["spend_limit_usd"] = spend_limit_usd
+
+    monkeypatch.setattr(cli, "_create_key", fake_create_key)
+    monkeypatch.setattr("sys.argv", ["llm-gateway", "create-key", *argv])
+    cli.main()
+    return called
+
+
+def test_create_key_rejects_zero_expiry(monkeypatch, capsys) -> None:
+    """`--expires-in-days 0` virava 90 dias silenciosamente (`0 or DEFAULT`).
+
+    Zero não é uma expiração válida: quem quer chave permanente usa
+    `--no-expiry`. O parser precisa recusar em vez de inventar um valor.
+    """
+    with pytest.raises(SystemExit):
+        _dispatch_create_key(monkeypatch, ["--client-name", "acme", "--expires-in-days", "0"])
+
+    assert "--expires-in-days" in capsys.readouterr().err
+
+
+def test_create_key_rejects_negative_expiry(monkeypatch, capsys) -> None:
+    """Expiração negativa criava chave que já nasce expirada (inútil, e silenciosa)."""
+    with pytest.raises(SystemExit):
+        _dispatch_create_key(monkeypatch, ["--client-name", "acme", "--expires-in-days", "-5"])
+
+    assert "--expires-in-days" in capsys.readouterr().err
+
+
+def test_create_key_rejects_expiry_above_the_api_ceiling(monkeypatch, capsys) -> None:
+    """`POST /api/keys` limita a 3650 dias; a CLI tem de aceitar o mesmo domínio."""
+    with pytest.raises(SystemExit):
+        _dispatch_create_key(monkeypatch, ["--client-name", "acme", "--expires-in-days", "99999"])
+
+    assert "3650" in capsys.readouterr().err
+
+
+def test_create_key_rejects_negative_spend_limit(monkeypatch, capsys) -> None:
+    """Teto de gasto negativo é recusado pela API (`ge=0`); a CLI aceitava."""
+    with pytest.raises(SystemExit):
+        _dispatch_create_key(monkeypatch, ["--client-name", "acme", "--spend-limit-usd", "-1"])
+
+    assert "--spend-limit-usd" in capsys.readouterr().err
+
+
+def test_create_key_rejects_blank_client_name(monkeypatch, capsys) -> None:
+    """`client_name` só com espaços viraria rótulo vazio na auditoria."""
+    with pytest.raises(SystemExit):
+        _dispatch_create_key(monkeypatch, ["--client-name", "   "])
+
+    assert "--client-name" in capsys.readouterr().err
+
+
+def test_create_key_strips_client_name_and_keeps_valid_input(monkeypatch) -> None:
+    """Caminho feliz: nome com espaço em volta é limpo e os limites válidos passam."""
+    called = _dispatch_create_key(
+        monkeypatch,
+        ["--client-name", "  acme  ", "--expires-in-days", "3650", "--spend-limit-usd", "0"],
+    )
+
+    assert called == {"client_name": "acme", "expires_in_days": 3650, "spend_limit_usd": 0.0}
