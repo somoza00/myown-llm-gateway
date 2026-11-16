@@ -16,6 +16,14 @@ from datetime import UTC, datetime, timedelta
 # expires after this many days unless --no-expiry is passed explicitly.
 DEFAULT_KEY_EXPIRY_DAYS = 90
 
+# Mesmo domínio aceito pela outra porta de provisionamento, `POST /api/keys`
+# (`KeyCreate`: `expires_in_days` 1..3650, `spend_limit_usd` >= 0, `client_name`
+# não vazio). Sem espelhar isso aqui, a CLI criava o que a API recusaria: uma
+# expiração no passado gera uma chave que já nasce inválida, e `--expires-in-days 0`
+# caía no `or DEFAULT` e virava silenciosamente 90 dias — ninguém pediu isso.
+MIN_KEY_EXPIRY_DAYS = 1
+MAX_KEY_EXPIRY_DAYS = 3650
+
 
 def _serve() -> None:
     from llm_gateway.main import run
@@ -156,12 +164,30 @@ def main() -> None:
     if args.command == "create-key":
         if args.no_expiry and args.expires_in_days is not None:
             parser.error("--no-expiry and --expires-in-days are mutually exclusive")
+        client_name = args.client_name.strip()
+        if not client_name:
+            parser.error("--client-name must not be blank")
+        if args.expires_in_days is not None and not (
+            MIN_KEY_EXPIRY_DAYS <= args.expires_in_days <= MAX_KEY_EXPIRY_DAYS
+        ):
+            parser.error(
+                f"--expires-in-days must be between {MIN_KEY_EXPIRY_DAYS} and "
+                f"{MAX_KEY_EXPIRY_DAYS} (use --no-expiry for a permanent key)"
+            )
+        if args.spend_limit_usd is not None and args.spend_limit_usd < 0:
+            parser.error("--spend-limit-usd must not be negative")
         expires_in_days = (
-            None if args.no_expiry else (args.expires_in_days or DEFAULT_KEY_EXPIRY_DAYS)
+            None
+            if args.no_expiry
+            else (
+                args.expires_in_days
+                if args.expires_in_days is not None
+                else DEFAULT_KEY_EXPIRY_DAYS
+            )
         )
         asyncio.run(
             _create_key(
-                args.client_name,
+                client_name,
                 expires_in_days=expires_in_days,
                 spend_limit_usd=args.spend_limit_usd,
             )
