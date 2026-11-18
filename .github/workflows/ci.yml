@@ -19,6 +19,30 @@ permissions:
   contents: read
 
 jobs:
+  compose-config:
+    # O `docker-compose.yml` era o único arquivo de infra que nenhum gate lia:
+    # ruff/mypy/pytest/migrations/docker-build não abrem o compose. Um anchor
+    # YAML quebrado, um `depends_on` com condição inválida, uma porta
+    # remapeada ou um `${VAR}` sem default passava por TODOS os jobs e só
+    # aparecia no `docker compose up` da máquina — derrubando o stack inteiro
+    # (o healthcheck do gateway depende de `redis`/`postgres` com
+    # `condition: service_healthy`). Os dois repos irmãos
+    # (study-memory-agent e evaluation-framework) já validam o compose no CI;
+    # aqui o alvo `make config` existia, mas nada o executava.
+    #
+    # O `.env` é obrigatório pelo `env_file:` do serviço `gateway` (de
+    # propósito: sem ele o container subiria com os defaults do Settings, um
+    # fallback silencioso). Por isso o job reproduz o passo documentado no
+    # README (`cp .env.example .env`) em vez de rodar num clone sem `.env`:
+    # valida exatamente a interpolação do arquivo que o usuário vai usar.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare .env (passo documentado no README)
+        run: cp .env.example .env
+      - name: Validate docker-compose
+        run: docker compose config -q
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -133,7 +157,13 @@ jobs:
 
   publish:
     name: Publish Docker image to GHCR
-    needs: test
+    # `needs: test` só garantia o job de testes: a imagem ia parar no GHCR
+    # mesmo quando o job `migrations` (upgrade/downgrade das migrations num
+    # Postgres real) ou o `docker-build` falhavam. Como o entrypoint do
+    # container roda `alembic upgrade head` no boot, publicar uma tag com a
+    # migration quebrada significava um deploy que sobe e cai em loop — com a
+    # tag/release já criada. Agora a publicação depende de os três passarem.
+    needs: [test, migrations, docker-build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
