@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -29,6 +30,27 @@ from llm_gateway.storage.redis import close_redis
 from llm_gateway.storage.redis import healthcheck as redis_healthcheck
 
 REQUEST_ID_HEADER = "X-Request-ID"
+
+# O `X-Request-ID` do cliente atravessa TRÊS fronteiras: é gravado em toda linha
+# de log da requisição (contextvars), ecoado no header da resposta e repassado
+# ao provedor upstream (providers/base.py) para correlação. Aceito como veio,
+# ele era um campo livre: um valor de vários KB inflava cada log daquela
+# requisição, e espaço/quebra/`"` embutido sujava o campo nos logs JSON e podia
+# quebrar o header no upstream. Um id nosso é curto e restrito; qualquer coisa
+# fora disso não é um id que valha correlacionar, então geramos um.
+_MAX_REQUEST_ID_LENGTH = 128
+_REQUEST_ID_RE = re.compile(rf"^[A-Za-z0-9._:@+/-]{{1,{_MAX_REQUEST_ID_LENGTH}}}$")
+
+
+def _safe_request_id(raw: str | None) -> str:
+    """Devolve o `X-Request-ID` do cliente se for utilizável; senão gera um novo.
+
+    "Utilizável" = até 128 caracteres de `[A-Za-z0-9._:@+/-]` (o alfabeto que
+    ids de correlação — UUID, W3C traceparent curto, hash — de fato usam).
+    """
+    if raw is not None and _REQUEST_ID_RE.fullmatch(raw):
+        return raw
+    return str(uuid.uuid4())
 
 settings = get_settings()
 logger = get_logger("main")
@@ -77,8 +99,13 @@ async def _request_id_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     """Bind a request id (client-supplied or generated) to every log line for this
-    request, and echo it back in the response header for cross-referencing."""
-    request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+    request, and echo it back in the response header for cross-referencing.
+
+    O id do cliente só é reaproveitado se passar em `_safe_request_id`: ele vai
+    para o log da requisição inteira, para o header da resposta e para o
+    upstream, então um valor livre (tamanho/charset) não pode entrar cru.
+    """
+    request_id = _safe_request_id(request.headers.get(REQUEST_ID_HEADER))
     bind_request_context(request_id=request_id)
     try:
         response = await call_next(request)
