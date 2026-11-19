@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from decimal import Decimal
 
 import httpx
 import respx
@@ -738,3 +739,156 @@ async def test_key_admin_disabled_when_admin_key_unset(
     assert create.status_code == 403
     assert "ADMIN_API_KEY" in create.json()["error"]["message"]
     assert (await client.delete(f"/api/keys/{api_key}", headers=ADMIN_AUTH)).status_code == 403
+
+
+# --- Edição de chave via HTTP (PATCH /api/keys/{id}) ---
+
+
+async def test_patch_key_updates_spend_limit_and_expiry(client) -> None:
+    """PATCH ajusta teto e prazo da MESMA chave (sem revogar e recriar)."""
+    created = (
+        await client.post(
+            "/api/keys",
+            headers=ADMIN_AUTH,
+            json={"client_name": "cliente-a", "spend_limit_usd": 5},
+        )
+    ).json()
+
+    resp = await client.patch(
+        f"/api/keys/{created['id']}",
+        headers=ADMIN_AUTH,
+        json={"spend_limit_usd": 42.5, "expires_in_days": 30},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert Decimal(body["spend_limit_usd"]) == Decimal("42.5")
+    assert body["expires_at"] is not None
+    assert body["is_active"] is True
+    assert "hashed_key" not in body and "api_key" not in body
+
+    # Persistiu de verdade: o GET devolve o mesmo valor.
+    keys = (await client.get("/api/keys", headers=AUTH)).json()["keys"]
+    listed = next(k for k in keys if k["id"] == created["id"])
+    assert Decimal(listed["spend_limit_usd"]) == Decimal("42.5")
+
+
+async def test_patch_key_null_removes_cap_and_expiry(client) -> None:
+    """`null` explícito remove o teto/prazo; campo ausente não é tocado."""
+    created = (
+        await client.post(
+            "/api/keys",
+            headers=ADMIN_AUTH,
+            json={"client_name": "cliente-b", "spend_limit_usd": 5, "expires_in_days": 7},
+        )
+    ).json()
+
+    resp = await client.patch(
+        f"/api/keys/{created['id']}",
+        headers=ADMIN_AUTH,
+        json={"spend_limit_usd": None},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["spend_limit_usd"] is None
+    # Só o teto foi removido; a expiração continua a que a chave já tinha.
+    assert body["expires_at"] is not None
+
+    resp = await client.patch(
+        f"/api/keys/{created['id']}", headers=ADMIN_AUTH, json={"expires_in_days": None}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["expires_at"] is None
+
+
+async def test_patch_key_reactivates_revoked_key(client) -> None:
+    """Reativar sem reemitir a credencial: a chave volta a autenticar."""
+    created = (
+        await client.post("/api/keys", headers=ADMIN_AUTH, json={"client_name": "volta"})
+    ).json()
+    revoked = await client.delete(f"/api/keys/{created['id']}", headers=ADMIN_AUTH)
+    assert revoked.status_code == 204
+
+    resp = await client.patch(
+        f"/api/keys/{created['id']}", headers=ADMIN_AUTH, json={"is_active": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_active"] is True
+
+    # A chave crua criada antes volta a valer no /v1 (não só o flag no banco).
+    from llm_gateway.core.security import hash_key
+    from llm_gateway.storage.repositories import get_key_by_hash
+
+    stored = await get_key_by_hash(hash_key(created["api_key"]))
+    assert stored is not None and stored.is_active is True
+
+
+async def test_patch_key_is_active_null_is_422(client, api_key) -> None:
+    """`is_active: null` não tem significado — 422 em vez de inventar um estado."""
+    resp = await client.patch(
+        f"/api/keys/{api_key}", headers=ADMIN_AUTH, json={"is_active": None}
+    )
+    assert resp.status_code == 422, resp.text
+
+
+async def test_patch_key_empty_body_is_400(client, api_key) -> None:
+    """PATCH sem nenhum campo conhecido é 400 (não um 200 que não mudou nada)."""
+    resp = await client.patch(f"/api/keys/{api_key}", headers=ADMIN_AUTH, json={})
+    assert resp.status_code == 400, resp.text
+
+
+async def test_patch_key_validation_and_not_found(client, api_key) -> None:
+    """Teto negativo e prazo zero são 400/422; id inexistente é 404."""
+    negative = await client.patch(
+        f"/api/keys/{api_key}", headers=ADMIN_AUTH, json={"spend_limit_usd": -1}
+    )
+    assert negative.status_code in {400, 422}, negative.text
+
+    zero_days = await client.patch(
+        f"/api/keys/{api_key}", headers=ADMIN_AUTH, json={"expires_in_days": 0}
+    )
+    assert zero_days.status_code in {400, 422}, zero_days.text
+
+    unknown = await client.patch(
+        "/api/keys/999999", headers=ADMIN_AUTH, json={"is_active": False}
+    )
+    assert unknown.status_code == 404, unknown.text
+
+
+async def test_virtual_key_cannot_patch_keys(client, api_key) -> None:
+    """Editar chave é administração: chave virtual recebe 401 e nada muda."""
+    resp = await client.patch(
+        f"/api/keys/{api_key}", headers=AUTH, json={"spend_limit_usd": 1}
+    )
+    assert resp.status_code == 401, resp.text
+
+    keys = (await client.get("/api/keys", headers=AUTH)).json()["keys"]
+    assert next(k for k in keys if k["id"] == api_key)["spend_limit_usd"] is None
+
+
+async def test_patch_key_records_audit_log(client, api_key) -> None:
+    """A edição fica auditada (`key_updated` com os campos tocados)."""
+    from sqlalchemy import select
+
+    from llm_gateway.storage.database import async_session_factory
+    from llm_gateway.storage.orm import AuditLog
+
+    resp = await client.patch(
+        f"/api/keys/{api_key}", headers=ADMIN_AUTH, json={"spend_limit_usd": 3}
+    )
+    assert resp.status_code == 200, resp.text
+
+    async with async_session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(AuditLog)
+                    .where(AuditLog.action == "key_updated")
+                    .order_by(AuditLog.id.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert rows, "nenhuma linha de auditoria para key_updated"
+    assert rows[0].virtual_key_id == api_key
+    assert rows[0].detail == "spend_limit_usd"

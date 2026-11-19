@@ -180,13 +180,21 @@ request. Key creation and revocation are recorded in the `audit_logs` table
 by application code.
 
 The same operations are exposed over HTTP (`POST /api/keys`,
-`DELETE /api/keys/{id}`, plus `GET /api/keys` for metadata), but the mutating
+`PATCH /api/keys/{id}`, `DELETE /api/keys/{id}`, plus `GET /api/keys` for
+metadata), but the mutating
 ones require a **separate admin credential**: set `ADMIN_API_KEY` in `.env` and
 send it as `Authorization: Bearer <ADMIN_API_KEY>`. A virtual key is not
 accepted there — otherwise any client key (with its own spend cap and expiry)
 could mint an uncapped key for itself or revoke another tenant's key. With
-`ADMIN_API_KEY` unset, those two routes answer `403` and key management stays
+`ADMIN_API_KEY` unset, those routes answer `403` and key management stays
 CLI-only, which is the default and the way a deploy bootstraps its first key.
+
+`PATCH /api/keys/{id}` edits a key in place instead of revoking and reissuing
+it: `spend_limit_usd` (new cap, `null` removes it), `expires_in_days` (renew
+from now, `null` removes the expiry) and `is_active` (`false` suspends without
+deleting, `true` reactivates). An omitted field is left untouched; each edit is
+recorded as `key_updated` in `audit_logs`. Reactivating does not extend the
+expiry, so an already-expired key needs a new `expires_in_days`.
 
 ## 4. First call
 
