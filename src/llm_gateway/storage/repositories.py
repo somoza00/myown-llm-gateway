@@ -149,6 +149,34 @@ async def deactivate_key(key_id: int) -> ApiKey | None:
         return key
 
 
+# Colunas que um PATCH pode tocar. A lista é fechada de propósito: `update_key`
+# recebe um dict e faz `setattr`, então aceitar chave arbitrária deixaria a rota
+# HTTP escrever em `hashed_key` (sequestrando a chave de outro cliente) ou em
+# `created_at`.
+_UPDATABLE_KEY_COLUMNS = frozenset({"spend_limit_usd", "expires_at", "is_active"})
+
+
+async def update_key(key_id: int, changes: dict[str, object]) -> ApiKey | None:
+    """Apply `changes` to one key; return the updated record, or None if it does not exist.
+
+    Só campos presentes no dict são alterados — é isso que permite distinguir
+    "não mexi no teto" de "removi o teto" num PATCH (o router decide: campo
+    ausente não entra no dict, campo `null` entra com valor None).
+    """
+    unknown = set(changes) - _UPDATABLE_KEY_COLUMNS
+    if unknown:
+        raise ValueError(f"colunas não editáveis: {', '.join(sorted(unknown))}")
+    async with async_session_factory() as session:
+        key = await session.get(ApiKey, key_id)
+        if key is None:
+            return None
+        for column, value in changes.items():
+            setattr(key, column, value)
+        await session.commit()
+        await session.refresh(key)
+        return key
+
+
 async def create_audit_log(
     *, action: str, virtual_key_id: int, client_name: str, detail: str | None = None
 ) -> None:

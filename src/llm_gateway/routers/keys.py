@@ -20,7 +20,12 @@ from llm_gateway.core.security import hash_key
 from llm_gateway.routers.chat import authenticate_request
 from llm_gateway.storage.database import async_session_factory
 from llm_gateway.storage.orm import ApiKey
-from llm_gateway.storage.repositories import create_audit_log, deactivate_key, list_keys
+from llm_gateway.storage.repositories import (
+    create_audit_log,
+    deactivate_key,
+    list_keys,
+    update_key,
+)
 
 router = APIRouter(prefix="/api", tags=["keys"])
 
@@ -113,6 +118,31 @@ class KeySummary(BaseModel):
     expires_at: datetime | None
 
 
+class KeyUpdate(BaseModel):
+    """Body do PATCH /api/keys/{key_id} — todos os campos opcionais.
+
+    Campo AUSENTE = não mexe. Campo presente com `null` = remove o valor
+    (`spend_limit_usd: null` tira o teto, `expires_in_days: null` tira a
+    expiração). É a diferença entre "não falei do teto" e "quero ficar sem teto".
+    """
+
+    spend_limit_usd: float | None = Field(default=None, ge=0)
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+    is_active: bool | None = None
+
+
+def _summary(key: ApiKey) -> KeySummary:
+    """Converte o registro ORM na visão sem segredo usada por GET e PATCH."""
+    return KeySummary(
+        id=key.id,
+        client_name=key.client_name,
+        is_active=key.is_active,
+        spend_limit_usd=str(key.spend_limit_usd) if key.spend_limit_usd is not None else None,
+        created_at=key.created_at,
+        expires_at=key.expires_at,
+    )
+
+
 @router.get("/keys", response_model=dict[str, list[KeySummary]])
 async def get_keys(_virtual_key_id: int = Depends(authenticate_request)) -> dict[str, object]:
     """Lista as chaves virtuais (id, cliente, ativa, teto, datas) — sem o hash.
@@ -120,21 +150,7 @@ async def get_keys(_virtual_key_id: int = Depends(authenticate_request)) -> dict
     Requer autenticação por chave virtual, como `/api/logs` e `/api/usage/spend`.
     """
     keys = await list_keys()
-    return {
-        "keys": [
-            KeySummary(
-                id=key.id,
-                client_name=key.client_name,
-                is_active=key.is_active,
-                spend_limit_usd=(
-                    str(key.spend_limit_usd) if key.spend_limit_usd is not None else None
-                ),
-                created_at=key.created_at,
-                expires_at=key.expires_at,
-            )
-            for key in keys
-        ]
-    }
+    return {"keys": [_summary(key) for key in keys]}
 
 
 @router.post("/keys", status_code=status.HTTP_201_CREATED, response_model=KeyCreated)
@@ -190,6 +206,68 @@ async def create_key(
         created_at=key.created_at,
         expires_at=key.expires_at,
     )
+
+
+@router.patch("/keys/{key_id}", response_model=KeySummary)
+async def edit_key(
+    key_id: int,
+    payload: KeyUpdate,
+    _admin: None = Depends(require_admin_key),
+) -> KeySummary:
+    """Ajusta teto de gasto, expiração e estado de uma chave; 404 se não existir.
+
+    Antes, o teto só podia ser definido na criação: subir o limite de um cliente
+    exigia revogar a chave, criar outra e pedir que o cliente trocasse a
+    credencial (e o histórico de uso ficava órfão na chave antiga). Desativar
+    sem apagar (`is_active=False`) e reativar também não tinham caminho HTTP —
+    só o DELETE definitivo.
+
+    Semântica por campo: ausente = não mexe; `null` = remove o valor.
+    `expires_in_days: null` remove a expiração; `is_active: null` é 422 (não há
+    "nem ativa nem inativa"). Reativar NÃO estende o prazo: uma chave com
+    `expires_at` no passado continua sem autenticar até receber um novo
+    `expires_in_days`. Ação auditada (`key_updated`).
+    """
+    provided = payload.model_fields_set
+    if not provided:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="informe ao menos um campo: spend_limit_usd, expires_in_days ou is_active",
+        )
+
+    changes: dict[str, object] = {}
+    if "spend_limit_usd" in provided:
+        changes["spend_limit_usd"] = (
+            Decimal(str(payload.spend_limit_usd))
+            if payload.spend_limit_usd is not None
+            else None
+        )
+    if "expires_in_days" in provided:
+        changes["expires_at"] = (
+            datetime.now(UTC) + timedelta(days=payload.expires_in_days)
+            if payload.expires_in_days is not None
+            else None
+        )
+    if "is_active" in provided:
+        if payload.is_active is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="is_active não aceita null: use true para reativar ou false para desativar",
+            )
+        changes["is_active"] = payload.is_active
+
+    key = await update_key(key_id, changes)
+    if key is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="chave não encontrada"
+        )
+    await create_audit_log(
+        action="key_updated",
+        virtual_key_id=key.id,
+        client_name=key.client_name,
+        detail=",".join(sorted(changes)),
+    )
+    return _summary(key)
 
 
 @router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
