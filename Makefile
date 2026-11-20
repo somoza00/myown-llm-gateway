@@ -2,7 +2,16 @@
 # Uso: make config | make lint | make test | make ci | make up ...
 .PHONY: config up down install lint typecheck test ci migrate-smoke migrate-smoke-pg audit docker-build scan
 
+# Espelha o job `compose-config` do CI, inclusive o passo que ele roda antes:
+# `cp .env.example .env`. O serviço `gateway` declara `env_file: .env` (de
+# propósito: sem ele o container subiria com os defaults do Settings), então num
+# clone novo — sem `.env` — `docker compose config -q` aborta com "env file
+# .../.env not found" antes de validar o YAML. Na prática o alvo acusava o passo
+# documentado no README ("cp .env.example .env"), não o compose que ele deveria
+# validar; no CI isso não acontece porque o job cria o `.env` primeiro. Só cria
+# se faltar: um `.env` existente (com segredos reais) nunca é sobrescrito.
 config: ## Valida o docker-compose (sem subir nada)
+	@test -f .env || { echo ">> .env ausente: copiando .env.example (mesmo passo do CI)"; cp .env.example .env; }
 	docker compose config -q
 
 up: ## Sobe o stack em background
