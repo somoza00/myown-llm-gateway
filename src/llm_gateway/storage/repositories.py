@@ -91,11 +91,12 @@ async def create_failed_usage_log(
 
 async def list_usage_logs(
     limit: int, *, status: str | None = None, model: str | None = None,
-    provider: str | None = None, offset: int = 0,
+    provider: str | None = None, offset: int = 0, virtual_key_id: int | None = None,
 ) -> list[UsageLog]:
     """Return the most recent `limit` usage logs (newest first), optionally filtered
-    by exact `status` ('ok'/'error'), exact `model` and/or exact `provider`
-    (e.g. 'openai', 'cache'). `offset` skips the first N rows (pagination)."""
+    by exact `status` ('ok'/'error'), exact `model`, exact `provider`
+    (e.g. 'openai', 'cache') and/or the caller's `virtual_key_id`.
+    `offset` skips the first N rows (pagination)."""
     stmt = select(UsageLog)
     if status is not None:
         stmt = stmt.where(UsageLog.status == status)
@@ -103,6 +104,8 @@ async def list_usage_logs(
         stmt = stmt.where(UsageLog.model == model)
     if provider is not None:
         stmt = stmt.where(UsageLog.provider == provider)
+    if virtual_key_id is not None:
+        stmt = stmt.where(UsageLog.virtual_key_id == virtual_key_id)
     async with async_session_factory() as session:
         result = await session.execute(
             stmt.order_by(UsageLog.id.desc()).limit(limit).offset(offset)
@@ -111,7 +114,11 @@ async def list_usage_logs(
 
 
 async def count_usage_logs(
-    *, status: str | None = None, model: str | None = None, provider: str | None = None
+    *,
+    status: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    virtual_key_id: int | None = None,
 ) -> int:
     """Count the usage logs matching the same filters as `list_usage_logs`.
 
@@ -125,6 +132,8 @@ async def count_usage_logs(
         stmt = stmt.where(UsageLog.model == model)
     if provider is not None:
         stmt = stmt.where(UsageLog.provider == provider)
+    if virtual_key_id is not None:
+        stmt = stmt.where(UsageLog.virtual_key_id == virtual_key_id)
     async with async_session_factory() as session:
         result = await session.execute(stmt)
         return int(result.scalar_one())
