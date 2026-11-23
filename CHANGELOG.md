@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `GET /api/logs` passou a ser escopado por chave: uma chave virtual vê só as
+  próprias requisições (antes via as de todos os clientes — modelo, tokens,
+  custo, latência e erro). A visão completa exige `ADMIN_API_KEY` no header
+  `Authorization: Bearer`, o mesmo segredo que protege criar/revogar chaves; a
+  resposta traz `scope: "own" | "all"` dizendo qual visão foi aplicada.
+
 ### Added
 - Three new providers, all OpenAI-compatible and reusing `OpenAIProvider`
   (no new adapter classes needed, same as Groq): **Gemini** (`GEMINI_API_KEY`;

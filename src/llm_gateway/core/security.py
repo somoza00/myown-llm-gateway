@@ -24,6 +24,17 @@ def hash_key(raw_key: str) -> str:
     return hashlib.new(_HASH_ALGORITHM, raw_key.encode("utf-8")).hexdigest()
 
 
+def presented_bearer_token(authorization: str | None) -> str:
+    """Return the token from an `Authorization: Bearer <token>` header ('' when absent).
+
+    Usado por toda rota que aceita o segredo no `Authorization` (chave virtual e
+    `ADMIN_API_KEY`), para que o parsing do header exista num lugar só.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return ""
+    return authorization.removeprefix("Bearer ").strip()
+
+
 def verify_key_hash(raw_key: str, expected_hash: str) -> bool:
     """Constant-time comparison of a raw key against a stored hash."""
     return hmac.compare_digest(hash_key(raw_key), expected_hash)
