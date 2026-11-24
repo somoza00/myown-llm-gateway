@@ -21,11 +21,57 @@ logger = get_logger("usage")
 _background_tasks: set[asyncio.Task[None]] = set()
 
 
+def _log_background_failure(task: asyncio.Task[None]) -> None:
+    """Log the exception of a fire-and-forget task instead of dropping it.
+
+    `asyncio` só avisa "Task exception was never retrieved" quando a task é
+    coletada pelo GC — e o request que a agendou já respondeu, então a falha
+    nunca aparece junto do request a que pertence. Aqui ela é consumida e
+    logada na hora, com o mesmo `logger` estruturado do resto do serviço.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("usage_task_failed", error=str(exc), exc_info=exc)
+
+
 def _fire_and_forget(coro: Coroutine[Any, Any, None]) -> None:
     """Schedule a coroutine without blocking the caller or losing it to GC."""
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    # Consome/loga a exceção: sem este callback ela não tem dono (ver acima).
+    task.add_done_callback(_log_background_failure)
+
+
+async def _persist_failed_request(
+    *, virtual_key_id: int, provider: str, model: str, latency_ms: int, error_type: str
+) -> None:
+    """Grava a linha de falha; se o banco recusar, loga em vez de perder o erro.
+
+    Espelha `persist_usage`: o log do erro não pode derrubar o request (o
+    cliente já recebeu 429/502) nem sumir sem rastro. Sem este `except`, a
+    exceção do banco ficava só na task descartada — justamente no cenário em
+    que mais se quer saber o motivo (banco/Redis fora, 5xx em cascata), o
+    painel ficava sem as linhas de erro e o operador sem a causa no log.
+    """
+    try:
+        await create_failed_usage_log(
+            virtual_key_id=virtual_key_id,
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            error_type=error_type,
+        )
+    except Exception:
+        logger.exception(
+            "usage_persist_failed",
+            provider=provider,
+            model=model,
+            status="error",
+            error_type=error_type,
+        )
 
 
 def record_failed_request(
@@ -35,7 +81,7 @@ def record_failed_request(
     """Schedule a failed-request log entry (status='error'); never raises."""
     prometheus_metrics.record_failure(provider=provider, model=model, error_type=error_type)
     _fire_and_forget(
-        create_failed_usage_log(
+        _persist_failed_request(
             virtual_key_id=virtual_key_id,
             provider=provider,
             model=model,

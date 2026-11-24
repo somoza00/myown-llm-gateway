@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Falha ao gravar o log de uma requisição com erro (status `error`) não é mais
+  perdida: `record_failed_request` já agendava a escrita sem bloquear o request,
+  mas a exceção do banco ficava sem dono na task descartada ("Task exception was
+  never retrieved") — o painel `/ui` aparecia sem as linhas de erro exatamente
+  quando o banco estava fora, e o log não dizia por quê. Agora a task consome e
+  loga a exceção (`usage_persist_failed` / `usage_task_failed`).
+
 ### Security
 - `GET /api/logs` passou a ser escopado por chave: uma chave virtual vê só as
   próprias requisições (antes via as de todos os clientes — modelo, tokens,
