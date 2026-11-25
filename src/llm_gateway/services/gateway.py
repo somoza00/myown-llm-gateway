@@ -7,7 +7,7 @@ import time
 from collections.abc import Coroutine
 from typing import Any
 
-from llm_gateway.core.exceptions import NoProviderAvailableError
+from llm_gateway.core.exceptions import NoProviderAvailableError, ProviderError
 from llm_gateway.models.api import ChatRequest, ChatResponse
 from llm_gateway.models.provider import ModelPricing
 from llm_gateway.providers.factory import ProviderRegistry
@@ -137,8 +137,24 @@ async def handle_chat_completion(
         # `cache_service.set` engole `RedisError`, portanto gravar antes não
         # muda o desfecho da requisição quando o Redis está fora.
         await cache_service.set(cache_key, response)
-    except Exception as exc:
-        future.set_exception(exc)
+    except BaseException as exc:
+        # `BaseException`, não `Exception`: `CancelledError` não herda de
+        # `Exception` (desde o 3.8). Com o `except Exception` de antes, um líder
+        # cancelado (cliente desconectou, shutdown do servidor, timeout do ASGI)
+        # deixava o future SEM resultado e SEM erro, e quem já estava no
+        # `await inflight` — todo request idêntico coalescido neste cache key —
+        # esperava para sempre, sem timeout, até o cliente desistir da conexão.
+        # Cancelamento vira `ProviderError` para o follower: a rota traduz em
+        # 502 estruturado (o trabalho upstream realmente não terminou) em vez de
+        # deixá-lo pendurado.
+        if isinstance(exc, Exception):
+            future.set_exception(exc)
+        else:
+            future.set_exception(
+                ProviderError(
+                    "single-flight leader cancelado antes de responder", provider="gateway"
+                )
+            )
         # Mark it retrieved even if no follower ever awaits this future: otherwise
         # asyncio logs "exception was never retrieved" when it's garbage-collected.
         future.exception()
