@@ -349,3 +349,38 @@ async def test_cache_is_written_before_the_lock_is_released(redis_stub, monkeypa
 
     assert events == ["set", "release"], "o cache deve ser gravado antes de soltar o lock"
     assert cached_at_release["value"] is not None, "lock livre com cache vazio duplica a chamada"
+
+
+async def test_follower_is_released_when_leader_is_cancelled(redis_stub) -> None:
+    """Regressão: líder cancelado deixava os followers pendurados para sempre.
+
+    `CancelledError` NÃO herda de `Exception` (desde o Python 3.8), então o
+    `except Exception` do single-flight não resolvia o future quando o request
+    líder era cancelado (cliente desconectou, shutdown do servidor, timeout do
+    ASGI). Quem já estava no `await inflight` — todo request idêntico coalescido
+    no MESMO cache key — esperava um future que ninguém mais resolveria, sem
+    timeout, até o cliente desistir da conexão.
+    """
+    release = asyncio.Event()
+    provider = SlowStubProvider(make_response(), release=release)
+    registry = ProviderRegistry([provider], httpx.AsyncClient())
+
+    leader = asyncio.create_task(
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+    )
+    await asyncio.sleep(0)  # líder está dentro da chamada ao provedor
+    assert provider.calls == 1
+    follower = asyncio.create_task(
+        gateway.handle_chat_completion(REQUEST, registry, virtual_key_id=1)
+    )
+    await asyncio.sleep(0)  # follower achou o future em `_inflight` e está esperando
+
+    leader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+
+    # Sem a correção este await nunca retorna (o wait_for estoura com 1s).
+    with pytest.raises(ProviderError):
+        await asyncio.wait_for(follower, timeout=1.0)
+    assert provider.calls == 1  # o follower não repetiu a chamada ao provedor
+    assert gateway._inflight == {}
