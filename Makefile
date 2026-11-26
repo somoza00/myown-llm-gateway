@@ -43,12 +43,17 @@ test: ## Gate rapido local: ruff + mypy + pytest
 # dessincronizado, dependencia faltando no pyproject) passava por
 # lint/types/audit/pytest e so aparecia no CI, minutos depois do push.
 #
+# PS: o job `compose-config` do ci.yml (primeiro da lista) so era coberto por
+# `make config`, que nao estava na cadeia — um `docker-compose.yml` invalido
+# (anchor quebrado, `${VAR}` sem default, `depends_on` com condicao invalida)
+# passava por `make ci` inteiro e so aparecia no `docker compose up`.
+#
 # O job `migrations` (Postgres) fica de fora de proposito: ele exige um
 # Postgres de verdade no ar, e o alvo local equivalente (`migrate-smoke-pg`)
 # depende de `docker compose up -d postgres`. O Trivy do job `docker-build`
 # idem: precisa do binario `trivy` instalado no host (`make scan`). Quem quiser
 # o CI inteiro roda `make ci && make migrate-smoke-pg && make scan`.
-ci: lint typecheck audit migrate-smoke docker-build ## Sequencia do CI: job `test` (lint + types + audit + migrate-smoke + pytest) + job `docker-build`
+ci: config lint typecheck audit migrate-smoke docker-build ## Sequencia do CI: job `compose-config` + job `test` (lint + types + audit + migrate-smoke + pytest) + job `docker-build`
 	.venv/bin/pytest
 
 # Mesmo passo do job `test` no CI: um ALTER/DROP que só quebra no downgrade não
