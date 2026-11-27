@@ -7,8 +7,13 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
-from llm_gateway.core.exceptions import NoProviderAvailableError, ProviderRateLimitedError
+from llm_gateway.core.exceptions import (
+    NoProviderAvailableError,
+    ProviderAuthError,
+    ProviderRateLimitedError,
+)
 from llm_gateway.models.api import ChatRequest, ChatResponse, Usage
 from llm_gateway.models.provider import ProviderConfig
 from llm_gateway.providers.anthropic import AnthropicProvider
@@ -76,6 +81,72 @@ async def test_empty_provider_list_raises() -> None:
     with pytest.raises(NoProviderAvailableError):
         async for _ in stream_chat_completion(REQUEST, registry):
             pass
+
+
+async def test_empty_stream_falls_back_to_next_provider() -> None:
+    """Provedor que abre o stream e não manda NENHUM chunk não pode "vencer".
+
+    `__anext__` levanta `StopAsyncIteration` antes do primeiro evento: sem o
+    `except` dedicado, essa exceção subiria como erro cru do generator no meio
+    da resposta SSE (o cliente já recebeu 200 e ficaria com um stream vazio em
+    vez de ser servido pelo próximo provedor da cadeia).
+    """
+    silent = StubStreamProvider("openai", [])
+    healthy = StubStreamProvider("groq", ["data: ok\n\n"])
+    registry = make_registry(silent, healthy)
+
+    pairs = [(p.config.name, line) async for p, line in stream_chat_completion(REQUEST, registry)]
+
+    assert pairs == [("groq", "data: ok\n\n")]
+    assert silent.calls == 1 and healthy.calls == 1
+
+
+async def test_only_empty_streams_raise_no_provider_without_last_error() -> None:
+    """Todos mudos → `NoProviderAvailableError`, sem `last_error` (ninguém falhou)."""
+    registry = make_registry(StubStreamProvider("openai", []), StubStreamProvider("groq", []))
+    with pytest.raises(NoProviderAvailableError) as exc_info:
+        async for _ in stream_chat_completion(REQUEST, registry):
+            pass
+    assert exc_info.value.attempted_providers == ["openai", "groq"]
+    assert exc_info.value.last_error is None
+
+
+async def test_auth_error_at_stream_start_falls_back_and_logs_warning() -> None:
+    """401/403 do provedor no início do stream entra na cadeia de fallback.
+
+    A `ProviderAuthError` tem `except` próprio (antes do `ProviderError`
+    genérico) porque é o caso que mais acontece em produção — chave revogada ou
+    sem permissão no modelo — e precisa do log `provider_auth_failed` para
+    distinguir "credencial quebrada" de "provedor fora" na hora do incidente.
+    """
+    unauthorized = StubStreamProvider("openai", ProviderAuthError("401", provider="openai"))
+    healthy = StubStreamProvider("groq", ["data: ok\n\n"])
+    registry = make_registry(unauthorized, healthy)
+
+    with capture_logs() as logs:
+        pairs = [
+            (p.config.name, line) async for p, line in stream_chat_completion(REQUEST, registry)
+        ]
+
+    assert pairs == [("groq", "data: ok\n\n")]
+    assert unauthorized.calls == 1 and healthy.calls == 1
+    assert any(
+        entry["event"] == "provider_auth_failed" and entry["provider"] == "openai" for entry in logs
+    )
+
+
+async def test_all_auth_errors_raise_no_provider_keeping_last_error() -> None:
+    """Todos com 401 → o `last_error` da cadeia é preservado para o 502 da rota."""
+    registry = make_registry(
+        StubStreamProvider("openai", ProviderAuthError("401", provider="openai")),
+        StubStreamProvider("groq", ProviderAuthError("403", provider="groq")),
+    )
+    with pytest.raises(NoProviderAvailableError) as exc_info:
+        async for _ in stream_chat_completion(REQUEST, registry):
+            pass
+    assert exc_info.value.attempted_providers == ["openai", "groq"]
+    assert isinstance(exc_info.value.last_error, ProviderAuthError)
+    assert exc_info.value.last_error.provider == "groq"
 
 
 def test_capture_usage_parses_usage_chunk() -> None:
